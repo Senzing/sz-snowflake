@@ -30,9 +30,11 @@ That is a reversal of the previous design, which handed a GitHub App private
 key to `pull_request` runs. A non-fork pull request receives secrets _and_
 runs the workflow definition from the pull request head, so anyone with write
 on a public repository in this organization could have added a step that
-exfiltrated it. Nothing added to this file can recreate that exposure, because
-there is no longer a credential here that reaches anything else -- keep it
-that way.
+exfiltrated it. Nothing added to _this_ file can recreate that exposure,
+because there is no longer a credential here that reaches anything else -- keep
+it that way. The claim is about this workflow only: the standard-set workflows
+below still pass secrets on `pull_request`, so the repository as a whole has
+not shed that shape.
 
 The publish job refuses to overwrite an image tag that already exists in the
 registry. The rulesets stop a tag being created, moved or deleted; they do not
