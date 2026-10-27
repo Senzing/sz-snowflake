@@ -42,10 +42,10 @@ updates:
 
   # The container base image in ./Dockerfile.
   #
-  # This produces nothing today: the base is `senzing/senzingsdk-runtime:latest`
-  # behind an ARG, and Dependabot cannot bump a floating tag. The entry is here
-  # so that the day the base is pinned to a digest -- which the Dockerfile
-  # already says it should be -- updates start arriving with no second change.
+  # SUPERSEDED: this used to say the entry produced nothing, because the base
+  # was `senzing/senzingsdk-runtime:latest` behind an ARG. It is now a literal
+  # `FROM senzing/senzingsdk-runtime:<tag>@sha256:<digest>`, so Dependabot can
+  # see it and bumps both halves together.
   - package-ecosystem: "docker"
     assignees:
       - "brianmacy"
