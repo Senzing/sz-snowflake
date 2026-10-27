@@ -1,0 +1,8 @@
+# Keep the build context to what the Dockerfile actually needs.
+#
+# `payload/` is the unpacked release asset and IS needed. `payload-download/`
+# is the tarball it came from and is not -- excluding it keeps the context
+# small and means a future `COPY . .` cannot sweep the archive into the image.
+.git
+.github
+payload-download/

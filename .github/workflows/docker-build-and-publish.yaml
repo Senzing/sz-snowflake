@@ -1,0 +1,339 @@
+name: Docker build and publish
+
+# Builds the Senzing-on-Snowflake evaluation container and publishes it to
+# ghcr.io/senzing/sz-snowflake.
+#
+# THIS WORKFLOW AUTHENTICATES TO NOTHING OUTSIDE THIS REPOSITORY.
+#
+# The application payload is built elsewhere and PUSHED here as a release
+# asset on this repository. This workflow reads that asset from its own
+# releases with its own GITHUB_TOKEN, and pushes the image to its own
+# organization's registry with the same token. There is no App key here, no
+# token for another repository, and nothing whose value has to be masked out
+# of these public logs.
+#
+# That is the whole reason the direction was reversed. The previous design
+# handed a GitHub App private key to `pull_request` runs. A non-fork pull
+# request receives secrets AND runs the workflow definition from the pull
+# request head, so anyone with write on a public repository in this
+# organization could have added a step that exfiltrated the key. Masking was
+# the only thing protecting the other identifier involved, and masking is
+# literal and case-sensitive, so it never covered the lowercase spelling that
+# OCI references and module paths use anyway.
+#
+# TWO TRIGGERS, TWO JOBS:
+#
+#   pull_request       -> docker-build-pull-request
+#       Exercises the Dockerfile against the most recent published payload.
+#       Builds nothing that leaves the runner. Make this the required status
+#       check on main; the context name is exactly `docker build (pull
+#       request)`.
+#
+#   release: published -> docker-publish-release
+#       Builds, pushes, signs, attests. The release is created by the payload
+#       build, which is what makes a published image traceable to a tagged,
+#       signed build rather than to a merge.
+#
+# THERE IS DELIBERATELY NO workflow_dispatch ON THE PUBLISH PATH.
+# Tag creation here is restricted by ruleset to a single actor. A manual
+# dispatch would publish without a release and so route around that control.
+
+on:
+  pull_request:
+    branches:
+      - main
+  release:
+    types:
+      - published
+
+concurrency:
+  # `github.ref`, not `head_ref || ref_name`: those two put a branch named
+  # `1.0.0` and a tag named `1.0.0` into the same concurrency group, which is a
+  # collision this repository is unusually likely to see -- its tags are bare
+  # semver. `github.ref` is `refs/heads/...` / `refs/tags/...` /
+  # `refs/pull/N/merge` and cannot collide.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Pull request builds cycle and superseded runs are waste -- cancel them.
+  # A release build publishes something and must always run to completion.
+  #
+  # These two lines also put two releases published on the SAME tag into one
+  # queue, which is what keeps "Refuse to overwrite a published version" below
+  # from racing itself: a `github.ref` group plus `cancel-in-progress: false`
+  # holds the second run until the first finishes, so it sees the image the
+  # first one pushed. Load-bearing rather than incidental -- do not key this on
+  # anything coarser, and do not cancel release runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  PAYLOAD_BASENAME: sz-snowflake-payload
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Pull request: build only. Nothing is pushed, signed or attested.
+  # ---------------------------------------------------------------------------
+  docker-build-pull-request:
+    name: docker build (pull request)
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Note the deliberate difference from the publish job below: this one
+      # takes the LATEST payload, that one takes the payload belonging to the
+      # release that triggered it. A green pull request is evidence the
+      # Dockerfile builds, not evidence about the payload any particular
+      # release will ship.
+      #
+      # There is no fork special case any more. The asset is a release asset on
+      # this public repository, so a fork's read-only GITHUB_TOKEN reaches it
+      # exactly as well as a branch's does. The only fallback left covers a
+      # real condition rather than a credential one: before the first payload
+      # release exists there is nothing to download, and a required check that
+      # cannot pass until an unrelated repository is tagged would brick this
+      # one on day one.
+      - name: Prepare the build payload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p payload
+
+          tag="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+          if [ -z "$tag" ]; then
+            echo "::notice::No payload release yet."
+            echo "::notice::Building against a stub payload. The Dockerfile is exercised; its contents are not."
+            printf 'stub payload -- not a real artefact\n' > payload/STUB
+            exit 0
+          fi
+
+          echo "[INFO] using payload release ${tag}"
+          mkdir -p payload-download
+          gh release download "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${PAYLOAD_BASENAME}-*" \
+            --dir payload-download
+          ls -l payload-download
+          ( cd payload-download && sha256sum --check -- *.sha256 )
+          tar -xzf payload-download/*.tar.gz -C payload
+          # A COUNT, NOT A LISTING. This repository's run logs are public and
+          # the payload is built elsewhere; its file names are not ours to
+          # publish. `ls -l payload-download` above is fine -- those names come
+          # from PAYLOAD_BASENAME, which is set in this file.
+          echo "[INFO] payload file count: $(find payload -type f | wc -l)"
+
+      - name: Build the image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          # Snowpark Container Services runs linux/amd64. Anything else is
+          # dead weight here. (UNVERIFIED, and worth checking before anyone
+          # adds a platform: whether Snowflake's image repository accepts a
+          # multi-platform manifest list at all.)
+          platforms: linux/amd64
+          push: false
+          # No attestations on a throwaway build: nothing is published, and
+          # they cost build time on every pull request.
+          provenance: false
+          sbom: false
+
+  # ---------------------------------------------------------------------------
+  # Release: build, push to GHCR, sign, attest.
+  # ---------------------------------------------------------------------------
+  docker-publish-release:
+    name: docker publish (release)
+    if: github.event_name == 'release'
+    permissions:
+      # attestations + id-token: SLSA build provenance and the SBOM attestation.
+      # packages: push to ghcr.io/senzing/*. This is the one case GHCR accepts
+      #   the workflow's own GITHUB_TOKEN -- the package belongs to this
+      #   workflow's own organization. No PAT, nothing to rotate.
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Job level, not step level: a step's own `env:` is not visible to that
+      # step's `if:`. It is here so the notification step below can test the
+      # token, which this repository cannot confirm it receives -- see there.
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # GHCR namespaces are lowercase; this organization is spelled `Senzing`.
+      # `ghcr.io/Senzing/...` is a 403, not a 404, so get this wrong and the
+      # failure reads as a permissions problem.
+      - name: Resolve image coordinates
+        id: image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          owner_lc="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          name="$(basename "$REPO")"
+          echo "repository=${owner_lc}/${name}" >> "$GITHUB_OUTPUT"
+          echo "[INFO] image repository: ${owner_lc}/${name}"
+
+      # A PUBLISHED VERSION IS NEVER REPUBLISHED.
+      #
+      # The tag ruleset stops a new tag being created by anyone but the publish
+      # App, and a second ruleset stops an existing tag being moved or deleted.
+      # Neither stops someone with write access creating a SECOND RELEASE on a
+      # tag that already exists, attaching a different asset, and triggering
+      # this job -- which would put different bytes behind a version that has
+      # already shipped, with a valid signature and an honest attestation.
+      #
+      # The registry is the thing that can answer "has this version already
+      # shipped", so ask it. This is the control; the rulesets are upstream of
+      # it, not a substitute for it.
+      - name: Refuse to overwrite a published version
+        env:
+          GH_TOKEN_FOR_REGISTRY: ${{ secrets.GITHUB_TOKEN }}
+          # NOT `github.actor`. This job is triggered by a release that a
+          # GitHub App created, so `github.actor` is `<app-slug>[bot]` --
+          # square brackets and all. GHCR authenticates on the token, not the
+          # username, but a deterministic value avoids finding out the hard
+          # way which characters the login accepts.
+          REGISTRY_USER: ${{ github.repository_owner }}
+          IMAGE: ghcr.io/${{ steps.image.outputs.repository }}
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN_FOR_REGISTRY" \
+            | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+
+          set +e
+          inspect_error="$(docker manifest inspect "${IMAGE}:${VERSION}" 2>&1 >/dev/null)"
+          inspect_rc=$?
+          set -e
+
+          if [ "$inspect_rc" -eq 0 ]; then
+            echo "::error::${IMAGE}:${VERSION} already exists. A published version is immutable; cut a new version instead."
+            exit 1
+          fi
+
+          # A NON-ZERO EXIT IS NOT THE SAME AS "DOES NOT EXIST". Discarding
+          # stderr made a 503, a rate limit or an expired token read as
+          # "proceed", the one direction this control must never fail in, so
+          # only a recognised not-found passes. `denied` is on the list because
+          # GHCR will not disclose whether a repository exists -- the first
+          # publish of a package answers `denied`, not `manifest unknown`; it
+          # would also cover an authorization failure, but `docker login` runs
+          # above under `set -e` and fails the step first.
+          case "$(printf '%s' "$inspect_error" | tr '[:upper:]' '[:lower:]')" in
+            *"manifest unknown"* | *"not found"* | *"denied"*) ;;
+            *)
+              echo "::error::Cannot establish whether ${IMAGE}:${VERSION} already exists: docker manifest inspect exited ${inspect_rc} with: ${inspect_error}"
+              echo "::error::Refusing to publish on an unanswered immutability check. Re-run once the registry is reachable."
+              exit 1
+              ;;
+          esac
+
+          echo "[INFO] ${IMAGE}:${VERSION} does not exist yet (registry said: ${inspect_error})"
+
+      - name: Download the release payload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          echo "[INFO] using payload release ${TAG}"
+          mkdir -p payload-download
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${PAYLOAD_BASENAME}-*" \
+            --dir payload-download
+          ls -l payload-download
+
+      - name: Verify and unpack the payload
+        run: |
+          set -euo pipefail
+          cd payload-download
+          sha256sum --check -- *.sha256
+          mkdir -p ../payload
+          tar -xzf ./*.tar.gz -C ../payload
+          # See the note on the pull request job: a count, not a listing. These
+          # logs are public and the payload's file names are not ours.
+          echo "[INFO] payload file count: $(find ../payload -type f | wc -l)"
+
+      # ATTESTATIONS ARE CORRECT HERE. DO NOT STRIP THEM AGAIN.
+      #
+      # We rejected SLSA build provenance on an earlier workflow, and the
+      # reason does not apply to this one. That workflow only copied bytes
+      # between registries: attesting "this was built here" would have been a
+      # false statement about an image this estate did not build.
+      #
+      # This job genuinely builds the image -- it runs the Dockerfile in this
+      # repository over a payload whose checksum it verified above. Build
+      # provenance, the SBOM attestation and the cosign signature are all
+      # honest claims about work that actually happened on this runner, and
+      # every identifier they record names THIS repository, which is public.
+      #
+      # One thing to keep true: provenance is `mode=max`, which records build
+      # arguments and the build environment. Never pass anything about where
+      # the payload was built as a build arg, or it lands in a public
+      # attestation and in the image config's ARG/ENV history, which no
+      # provenance setting suppresses.
+      - name: Build, push, sign and attest
+        uses: senzing-factory/github-action-docker-buildx-build@v2
+        with:
+          image-repository: ${{ steps.image.outputs.repository }}
+          image-tag: ${{ github.event.release.tag_name }}
+          # `login-to-dockerhub` is a misnomer in this action: it is the
+          # generic registry login, and `registry-server` decides which one.
+          login-to-dockerhub: true
+          registry-server: ghcr.io
+          # See the registry-user note above: `github.actor` is the App's bot
+          # login on a release event, not a person.
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          platforms: linux/amd64
+          push: true
+          sign-image: true
+          # The payload is already unpacked into the build context above, so
+          # the action must not check out over it.
+          skip-checkout: true
+          # `:latest` IS pushed, and this line is explicit because the default
+          # is `false` and a silent default is how it got documented as "not
+          # pushed". It also cannot be flipped on its own: the action's
+          # `attestations/action.yaml` hands `anchore/sbom-action` the image
+          # with NO tag, so syft resolves `:latest` -- stop pushing it and the
+          # SBOM attached to this build's digest either describes a different
+          # image or, on the first release, cannot resolve at all.
+          # Verified against senzing-factory/github-action-docker-buildx-build
+          # at `v2` (commit d78a827d7a2d261139187f193d2c776d20b31e61).
+          skip-latest-tag: false
+
+      - name: Notify Slack on failure
+        # A release build publishes and nobody is watching it. A pull request
+        # build has a developer looking right at it, so it is silent by design.
+        #
+        # Guarded on the token being non-empty, the same shape the private
+        # repository uses. `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` are `Senzing`
+        # ORG secrets and whether they are visible to this repository has NOT
+        # been confirmed -- the sandbox credential cannot read org secrets
+        # (403). Unguarded, an absent token turns a failed release into TWO
+        # red jobs, the second one about Slack, which buries the first.
+        if: ${{ (failure() || cancelled()) && env.SLACK_BOT_TOKEN != '' }}
+        uses: senzing-factory/build-resources/slack-failure-notification@v4
+        with:
+          job-status: ${{ job.status }}
+          slack-channel: ${{ secrets.SLACK_CHANNEL }}
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          additional-info: "ghcr.io/${{ steps.image.outputs.repository }}:${{ github.event.release.tag_name }}"

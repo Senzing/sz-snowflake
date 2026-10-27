@@ -1,0 +1,61 @@
+# Please see the documentation for all configuration options:
+# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
+#
+# `cooldown.default-days: 21` delays routine *version* bumps for 21 days after
+# publication (protection against yanked/regressed/compromised releases).
+# Cooldown does NOT apply to *security* updates.
+
+version: 2
+updates:
+  # GitHub Actions used by the workflows in .github/workflows/
+  # Workflow/action bumps are infrastructure -- they go to the infrastructure
+  # maintainer, not to whoever owns the image contents.
+  - package-ecosystem: "github-actions"
+    assignees:
+      - "kernelsam"
+    cooldown:
+      default-days: 21
+      # First-party Senzing actions bypass the cooldown -- they are our own
+      # releases, so their updates land immediately rather than waiting 21
+      # days like third-party actions.
+      exclude:
+        - "senzing-factory/*"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "security"
+    groups:
+      # Grouped on its own so the cooldown-bypassed factory updates land as
+      # one immediate PR, separate from the cooled-down third-party actions.
+      senzing-factory:
+        patterns:
+          - "senzing-factory/*"
+      github-actions:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "senzing-factory/*"
+
+  # The container base image in ./Dockerfile.
+  #
+  # This produces nothing today: the base is `senzing/senzingsdk-runtime:latest`
+  # behind an ARG, and Dependabot cannot bump a floating tag. The entry is here
+  # so that the day the base is pinned to a digest -- which the Dockerfile
+  # already says it should be -- updates start arriving with no second change.
+  - package-ecosystem: "docker"
+    assignees:
+      - "brianmacy"
+    cooldown:
+      default-days: 21
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+      - "security"
