@@ -24,10 +24,12 @@ updates:
     schedule:
       interval: "daily"
     open-pull-requests-limit: 5
+    # No `security` label here: Dependabot applies `labels` to every pull
+    # request it opens, so listing it would paint routine bumps as advisories.
+    # The label is applied on triage, to the ones that actually are.
     labels:
       - "dependencies"
       - "github-actions"
-      - "security"
     groups:
       # Grouped on its own so the cooldown-bypassed factory updates land as
       # one immediate PR, separate from the cooled-down third-party actions.
@@ -40,12 +42,10 @@ updates:
         exclude-patterns:
           - "senzing-factory/*"
 
-  # The container base image in ./Dockerfile.
-  #
-  # SUPERSEDED: this used to say the entry produced nothing, because the base
-  # was `senzing/senzingsdk-runtime:latest` behind an ARG. It is now a literal
-  # `FROM senzing/senzingsdk-runtime:<tag>@sha256:<digest>`, so Dependabot can
-  # see it and bumps both halves together.
+  # The container base image in ./Dockerfile. The `FROM` must stay a literal
+  # `senzing/senzingsdk-runtime:<tag>@sha256:<digest>` -- Dependabot bumps both
+  # halves together, and sees nothing at all if the reference moves behind an
+  # ARG.
   - package-ecosystem: "docker"
     assignees:
       - "brianmacy"
@@ -55,7 +55,7 @@ updates:
     schedule:
       interval: "daily"
     open-pull-requests-limit: 5
+    # See the note on `security` above.
     labels:
       - "dependencies"
       - "docker"
-      - "security"

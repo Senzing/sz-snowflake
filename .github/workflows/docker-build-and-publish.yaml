@@ -163,13 +163,49 @@ jobs:
       packages: write
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      # Job level, not step level: a step's own `env:` is not visible to that
-      # step's `if:`. It is here so the notification step below can test the
-      # token, which this repository cannot confirm it receives -- see there.
-      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
     steps:
+      # FIRST, so every later failure can still be announced.
+      #
+      # The notification below is conditional on the token existing, and a
+      # step's own `env:` is not visible to that step's `if:` -- so the token
+      # has to be read somewhere else. Read it into THIS step and publish a
+      # boolean, rather than a job-level `env:` that would also hand it to the
+      # third-party build action.
+      - name: Check whether Slack is configured
+        id: slack
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SLACK_BOT_TOKEN:-}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SLACK_BOT_TOKEN is not set; a failed release will not be announced."
+          fi
+
+      # `github.event.release.tag_name` is used verbatim as the image tag, and
+      # the build action is the first thing that would reject a bad one --
+      # after the immutability check and the payload download. Fail here.
+      #
+      # NARROWER than Docker's `[A-Za-z0-9_][A-Za-z0-9._-]{0,127}` on purpose.
+      # This repository releases bare semver -- the concurrency notes here and
+      # in the other two workflows already rely on it -- and the Docker
+      # grammar alone would pass `latest` or `main`, which are wrong here for
+      # reasons the registry cannot see.
+      - name: Validate the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag '${TAG}' is not bare semver."
+            echo "::error::It becomes this image's Docker tag, so it must be MAJOR.MINOR.PATCH with an optional pre-release suffix, e.g. 1.0.0 or 1.0.0-rc1."
+            exit 1
+          fi
+          echo "[INFO] release tag ${TAG} is valid"
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -291,6 +327,10 @@ jobs:
       # attestation and in the image config's ARG/ENV history, which no
       # provenance setting suppresses.
       - name: Build, push, sign and attest
+        # `@v2` floats deliberately -- hash-pin what we do not own, float what
+        # we do, and this one is ours (.github/linters/zizmor.yaml encodes it).
+        # So nothing here pins a commit: the note below records what `v2`
+        # resolved to when it was read, not what will run.
         uses: senzing-factory/github-action-docker-buildx-build@v2
         with:
           image-repository: ${{ steps.image.outputs.repository }}
@@ -316,21 +356,23 @@ jobs:
           # with NO tag, so syft resolves `:latest` -- stop pushing it and the
           # SBOM attached to this build's digest either describes a different
           # image or, on the first release, cannot resolve at all.
-          # Verified against senzing-factory/github-action-docker-buildx-build
-          # at `v2` (commit d78a827d7a2d261139187f193d2c776d20b31e61).
+          # Read off that action's `attestations/action.yaml` as `v2` resolved
+          # on 2026-10-28: commit d78a827d7a2d261139187f193d2c776d20b31e61,
+          # release 2.2.1. `v2` moves, so re-read it if the SBOM looks wrong.
           skip-latest-tag: false
 
       - name: Notify Slack on failure
         # A release build publishes and nobody is watching it. A pull request
         # build has a developer looking right at it, so it is silent by design.
         #
-        # Guarded on the token being non-empty, the same shape the private
-        # repository uses. `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` are `Senzing`
-        # ORG secrets and whether they are visible to this repository has NOT
-        # been confirmed -- the sandbox credential cannot read org secrets
-        # (403). Unguarded, an absent token turns a failed release into TWO
-        # red jobs, the second one about Slack, which buries the first.
-        if: ${{ (failure() || cancelled()) && env.SLACK_BOT_TOKEN != '' }}
+        # Guarded on the boolean computed in the first step, so the token
+        # itself reaches only that step and this one. `SLACK_BOT_TOKEN` and
+        # `SLACK_CHANNEL` are `Senzing` ORG secrets and whether they are
+        # visible to this repository has NOT been confirmed -- the sandbox
+        # credential cannot read org secrets (403). Unguarded, an absent token
+        # turns a failed release into TWO red jobs, the second one about
+        # Slack, which buries the first.
+        if: ${{ (failure() || cancelled()) && steps.slack.outputs.configured == 'true' }}
         uses: senzing-factory/build-resources/slack-failure-notification@v4
         with:
           job-status: ${{ job.status }}
