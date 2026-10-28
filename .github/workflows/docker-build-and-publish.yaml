@@ -194,14 +194,21 @@ jobs:
       # in the other two workflows already rely on it -- and the Docker
       # grammar alone would pass `latest` or `main`, which are wrong here for
       # reasons the registry cannot see.
+      #
+      # NO pre-release suffix. `skip-latest-tag: false` below is required so
+      # the SBOM step can resolve `:latest`, which means every publish moves
+      # that tag -- so a `1.0.0-rc1` release would repoint `:latest` at an
+      # unreleased build. Gating `skip-latest-tag` on `release.prerelease`
+      # would fix the tag and break the SBOM instead. Rejecting the suffix
+      # costs nothing: this repository has never released one.
       - name: Validate the release tag
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tag '${TAG}' is not bare semver."
-            echo "::error::It becomes this image's Docker tag, so it must be MAJOR.MINOR.PATCH with an optional pre-release suffix, e.g. 1.0.0 or 1.0.0-rc1."
+            echo "::error::It becomes this image's Docker tag, so it must be MAJOR.MINOR.PATCH, e.g. 1.0.0. Pre-release suffixes are rejected because every publish moves :latest."
             exit 1
           fi
           echo "[INFO] release tag ${TAG} is valid"
