@@ -7,9 +7,11 @@
 # What the pipeline guarantees you can rely on:
 #
 #   * `./payload/` exists in the build context when this file is built by
-#     .github/workflows/docker-build-and-publish.yaml. It is the unpacked,
-#     checksum-verified release asset attached to this repository's own
-#     releases. Before the first release exists it contains a single STUB
+#     .github/workflows/docker-build-and-publish.yaml. It is the unpacked
+#     release asset attached to this repository's own releases, checked
+#     against the `.sha256` published beside it -- integrity against a bad
+#     download, NOT proof of origin, because both assets come from the same
+#     release. Before the first release exists it contains a single STUB
 #     file instead, so the Dockerfile is still exercised on day one.
 #
 #   * The build is linux/amd64 only. Snowpark Container Services runs amd64;
@@ -71,7 +73,8 @@ RUN useradd --no-log-init --create-home --shell /bin/bash --uid 1001 --user-grou
 COPY --chown=senzing:senzing payload/ /app/
 
 # ---------------------------------------------------------------------------
-# Everything below here is Brian's to replace.
+# TODO: everything below here is placeholder for whoever owns the image
+# contents to replace.
 # ---------------------------------------------------------------------------
 WORKDIR /app
 
@@ -82,7 +85,19 @@ WORKDIR /app
 # restating it is what makes it visible to checkov (CKV_DOCKER_2) and trivy
 # (DS-0026), which read this file and not the base image's config.
 # senzingsdk-tools does the same thing for its own package.
-HEALTHCHECK CMD apt list --installed | grep senzingsdk-runtime
+#
+# `dpkg -s`, not `apt list --installed`: apt prints "WARNING: apt does not
+# have a stable CLI interface" on every non-tty run and is the wrong tool for
+# a script. The interval is explicit because what this checks cannot change
+# after build -- the default 30s would re-run it 2,880 times a day to learn
+# the same thing.
+#
+# `--start-interval` IS WHAT MAKES THE FIRST PROBE HAPPEN. `--interval=1h`
+# alone schedules it an hour after start, so the container reports `starting`
+# for that hour and anything gating on health waits it out. Needs Docker
+# Engine 25.0 or newer to BUILD; the runner has it, and an engine that does
+# not fails loudly on the unknown flag rather than silently ignoring it.
+HEALTHCHECK --interval=1h --start-interval=5s --timeout=5s --start-period=10s --retries=3 CMD dpkg -s senzingsdk-runtime >/dev/null 2>&1 || exit 1
 
 USER senzing
 
@@ -90,8 +105,16 @@ USER senzing
 # /snowflake/session/token for the container to authenticate back to Snowflake.
 # Whatever runs here reads it rather than carrying a credential of its own.
 #
-# FOR BRIAN: that mount arrives owned by root, and this container no longer
-# runs as root. Whether uid 1001 can read it is UNVERIFIED -- it is the first
+# TODO: that mount arrives owned by root, and this container no longer runs
+# as root. Whether uid 1001 can read it is UNVERIFIED -- it is the first
 # thing to check if authentication fails.
 
-CMD ["/bin/sh", "-c", "echo 'sz-snowflake: no entrypoint configured yet' && ls -la /app && sleep infinity"]
+# PID 1 NEEDS A HANDLER, NOT AN `exec`. The kernel skips the default action
+# for any signal a namespace's init process has not installed a handler for,
+# and `sleep` installs none (`SigCgt: 0000000000000000`) -- so `exec sleep
+# infinity` ignores SIGTERM exactly as the un-`exec`ed shell did, and every
+# stop waits out the full grace period before SIGKILL. The trap is what makes
+# the signal deliverable, and `sleep` runs in the background because the shell
+# runs a trap only on returning from `wait`. 143 is 128+SIGTERM, which is what
+# an `exec`ed process would have exited with.
+CMD ["/bin/sh", "-c", "trap 'exit 143' TERM; echo 'sz-snowflake: no entrypoint configured yet'; ls -la /app; sleep infinity & wait"]
