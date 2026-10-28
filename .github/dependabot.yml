@@ -29,7 +29,7 @@ updates:
     # The label is applied on triage, to the ones that actually are.
     labels:
       - "dependencies"
-      - "github-actions"
+      - "github_actions"
     groups:
       # Grouped on its own so the cooldown-bypassed factory updates land as
       # one immediate PR, separate from the cooled-down third-party actions.

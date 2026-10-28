@@ -5,6 +5,6 @@
 # release asset and `payload-download/` is the tarball it came from. NEITHER
 # MAY EVER BE COMMITTED: the workflow creates both directories inside this
 # working tree on every run, so a local `docker build` followed by a
-# `git add -A` would commit a build artefact into the repository's history.
+# `git add -A` would commit a build artifact into the repository's history.
 /payload/
 /payload-download/

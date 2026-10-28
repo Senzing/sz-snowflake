@@ -111,7 +111,7 @@ jobs:
           if [ -z "$tag" ]; then
             echo "::notice::No payload release yet."
             echo "::notice::Building against a stub payload. The Dockerfile is exercised; its contents are not."
-            printf 'stub payload -- not a real artefact\n' > payload/STUB
+            printf 'stub payload -- not a real artifact\n' > payload/STUB
             exit 0
           fi
 
@@ -274,7 +274,7 @@ jobs:
           # A NON-ZERO EXIT IS NOT THE SAME AS "DOES NOT EXIST". Discarding
           # stderr made a 503, a rate limit or an expired token read as
           # "proceed", the one direction this control must never fail in, so
-          # only a recognised not-found passes. `denied` is on the list because
+          # only a recognized not-found passes. `denied` is on the list because
           # GHCR will not disclose whether a repository exists -- the first
           # publish of a package answers `denied`, not `manifest unknown`; it
           # would also cover an authorization failure, but `docker login` runs
