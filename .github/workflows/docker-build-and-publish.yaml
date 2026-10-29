@@ -538,23 +538,18 @@ jobs:
           # published version -- see the step above.
           #
           # THIS REQUIRES A SHARED ACTION THAT TAKES THE SBOM AGAINST THE
-          # DIGEST. `attestations/action.yaml` hands `anchore/sbom-action`
-          # the image with no tag, so syft resolves `:latest` -- and skipping
-          # the tag would then attach an SBOM of whatever image holds it.
-          # Fixed by senzing-factory/github-action-docker-buildx-build#129,
-          # OPEN as of 2026-10-28: `v2` is still 2.2.1
-          # (d78a827d7a2d261139187f193d2c776d20b31e61).
+          # DIGEST, and `v2` has carried that since 2.3.0 (moved 2026-10-29,
+          # senzing-factory/github-action-docker-buildx-build#129). Before it,
+          # `attestations/action.yaml` handed `anchore/sbom-action` the image
+          # with no tag, so syft resolved `:latest` -- and withholding the tag
+          # would then have attached an SBOM of whatever image still held it.
           #
-          # DO NOT MERGE THIS BEFORE #129 IS RELEASED AND `v2` HAS MOVED.
-          # The first release is unaffected -- it is the highest version, so
-          # `skip` is false and `:latest` is this build. The first BACKPORT
-          # is where it bites, silently: `skip` becomes true, syft describes
-          # the older image, and that SBOM is attested against the new
-          # digest. Nothing here can detect it; a check that compared syft's
-          # recorded digest against the registry was written and removed,
-          # because syft records a daemon-side digest that matches no
-          # registry manifest -- measured against three real SBOMs from this
-          # action, so it was red on every release including correct ones.
+          # Why that mattered here rather than in general: the first release
+          # is unaffected either way, because it IS the highest version, so
+          # `skip` is false and `:latest` is this build. The first BACKPORT is
+          # where it bit, silently -- `skip` becomes true, syft describes the
+          # older image, and that SBOM is attested against the new digest.
+          # So pinning this caller below 2.3.0 reintroduces it.
           skip-latest-tag: ${{ steps.latest.outputs.skip }}
 
       - name: Notify Slack on failure
@@ -574,7 +569,11 @@ jobs:
           job-status: ${{ job.status }}
           slack-channel: ${{ secrets.SLACK_CHANNEL }}
           slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
-          additional-info: "ghcr.io/${{ steps.image.outputs.repository }}:${{ github.event.release.tag_name }}"
+          # The REPOSITORY only. This step runs on failure(), which includes
+          # the run where "Validate the release" rejected the tag -- passing
+          # `release.tag_name` here would hand the one input the workflow
+          # refused to trust straight to another action's input.
+          additional-info: "ghcr.io/${{ steps.image.outputs.repository }}"
 
   # ---------------------------------------------------------------------------
   # Manual: point `:latest` at the highest published version. Recovery only.
