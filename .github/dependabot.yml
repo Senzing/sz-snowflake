@@ -1,0 +1,61 @@
+# Please see the documentation for all configuration options:
+# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
+#
+# `cooldown.default-days: 21` delays routine *version* bumps for 21 days after
+# publication (protection against yanked/regressed/compromised releases).
+# Cooldown does NOT apply to *security* updates.
+
+version: 2
+updates:
+  # GitHub Actions used by the workflows in .github/workflows/
+  # Workflow/action bumps are infrastructure -- they go to the infrastructure
+  # maintainer, not to whoever owns the image contents.
+  - package-ecosystem: "github-actions"
+    assignees:
+      - "kernelsam"
+    cooldown:
+      default-days: 21
+      # First-party Senzing actions bypass the cooldown -- they are our own
+      # releases, so their updates land immediately rather than waiting 21
+      # days like third-party actions.
+      exclude:
+        - "senzing-factory/*"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    # No `security` label here: Dependabot applies `labels` to every pull
+    # request it opens, so listing it would paint routine bumps as advisories.
+    # The label is applied on triage, to the ones that actually are.
+    labels:
+      - "dependencies"
+      - "github_actions"
+    groups:
+      # Grouped on its own so the cooldown-bypassed factory updates land as
+      # one immediate PR, separate from the cooled-down third-party actions.
+      senzing-factory:
+        patterns:
+          - "senzing-factory/*"
+      github-actions:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "senzing-factory/*"
+
+  # The container base image in ./Dockerfile. The `FROM` must stay a literal
+  # `senzing/senzingsdk-runtime:<tag>@sha256:<digest>` -- Dependabot bumps both
+  # halves together, and sees nothing at all if the reference moves behind an
+  # ARG.
+  - package-ecosystem: "docker"
+    assignees:
+      - "brianmacy"
+    cooldown:
+      default-days: 21
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    # See the note on `security` above.
+    labels:
+      - "dependencies"
+      - "docker"

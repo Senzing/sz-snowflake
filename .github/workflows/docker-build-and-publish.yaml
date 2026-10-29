@@ -1,0 +1,666 @@
+name: Docker build and publish
+
+# Builds the Senzing-on-Snowflake evaluation container and publishes it to
+# ghcr.io/senzing/sz-snowflake.
+#
+# THIS WORKFLOW AUTHENTICATES TO NOTHING OUTSIDE THIS REPOSITORY.
+#
+# The application payload is built elsewhere and PUSHED here as a release
+# asset on this repository. This workflow reads that asset from its own
+# releases with its own GITHUB_TOKEN, and pushes the image to its own
+# organization's registry with the same token. There is no App key here, no
+# token for another repository, and nothing whose value has to be masked out
+# of these public logs.
+#
+# That is the whole reason the direction was reversed. The previous design
+# handed a GitHub App private key to `pull_request` runs. A non-fork pull
+# request receives secrets AND runs the workflow definition from the pull
+# request head, so anyone with write on a public repository in this
+# organization could have added a step that exfiltrated the key. Masking was
+# the only thing protecting the other identifier involved, and masking is
+# literal and case-sensitive, so it never covered the lowercase spelling that
+# OCI references and module paths use anyway.
+#
+# THREE TRIGGERS, THREE JOBS:
+#
+#   pull_request       -> docker-build-pull-request
+#       Exercises the Dockerfile against the newest published payload whose
+#       assets have finished uploading.
+#       Builds nothing that leaves the runner. Make this the required status
+#       check on main; the context name is exactly `docker build (pull
+#       request)`.
+#
+#   release: published -> docker-publish-release
+#       Builds, pushes, signs, attests. The release is created by the payload
+#       build, which is what makes a published image traceable to a tagged,
+#       signed build rather than to a merge.
+#
+#   workflow_dispatch  -> repoint-latest
+#       Moves `:latest` onto the highest published version. Recovery only.
+#
+# THERE IS DELIBERATELY NO workflow_dispatch ON THE PUBLISH PATH.
+# Tag creation here is restricted by ruleset to a single actor, so a manual
+# dispatch that BUILT something would publish without a release and route
+# around that control. `repoint-latest` builds and pushes no bytes -- it can
+# only move `:latest` onto a version this repository has already released.
+
+on:
+  pull_request:
+    branches:
+      - main
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+concurrency:
+  # `github.ref`, not `head_ref || ref_name`: those two put a branch named
+  # `1.0.0` and a tag named `1.0.0` into the same concurrency group, which is a
+  # collision this repository is unusually likely to see -- its tags are bare
+  # semver. `github.ref` is `refs/heads/...` / `refs/tags/...` /
+  # `refs/pull/N/merge` and cannot collide.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Pull request builds cycle and superseded runs are waste -- cancel them.
+  # A release build publishes something and must always run to completion.
+  #
+  # These two lines also put two releases published on the SAME tag into one
+  # queue, which is what keeps "Refuse to overwrite a published version" below
+  # from racing itself: a `github.ref` group plus `cancel-in-progress: false`
+  # holds the second run until the first finishes, so it sees the image the
+  # first one pushed. Load-bearing rather than incidental -- do not key this on
+  # anything coarser, and do not cancel release runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  PAYLOAD_BASENAME: sz-snowflake-payload
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Pull request: build only. Nothing is pushed, signed or attested.
+  # ---------------------------------------------------------------------------
+  docker-build-pull-request:
+    name: docker build (pull request)
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Note the deliberate difference from the publish job below: this one
+      # takes the NEWEST COMPLETE payload, that one takes the payload
+      # belonging to the release that triggered it. A green pull request is
+      # evidence the Dockerfile builds, not evidence about the payload any
+      # particular release will ship.
+      #
+      # There is no fork special case any more. The asset is a release asset on
+      # this public repository, so a fork's read-only GITHUB_TOKEN reaches it
+      # exactly as well as a branch's does. The only fallback left covers a
+      # real condition rather than a credential one: before the first payload
+      # release exists there is nothing to download, and a required check that
+      # cannot pass until an unrelated repository is tagged would brick this
+      # one on day one.
+      - name: Prepare the build payload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p payload
+
+          # SUCCEEDED-AND-EMPTY IS NOT THE SAME AS FAILED. A `|| true` here
+          # turned a rate limit, a 5xx or an expired token into "no release
+          # yet", so this required check went green against a stub. Only a
+          # successful call that returned nothing may take the stub path.
+          #
+          # `--exclude-drafts` because the release procedure in README.md
+          # deliberately leaves a draft sitting while its assets upload.
+          # `--exclude-pre-releases` because the publish job rejects one, so
+          # this check should not build against one either.
+          if ! gh release list --repo "$GITHUB_REPOSITORY" --limit 10 \
+            --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' \
+            >"${RUNNER_TEMP}/tags" 2>"${RUNNER_TEMP}/tags.err"; then
+            echo "::error::Cannot list releases on ${GITHUB_REPOSITORY}; refusing to fall back to the stub payload."
+            cat "${RUNNER_TEMP}/tags.err"
+            exit 1
+          fi
+
+          # Blank lines are dropped before the emptiness test, so that "no
+          # release" is decided on tags rather than on bytes.
+          mapfile -t candidates < <(grep -v '^[[:space:]]*$' "${RUNNER_TEMP}/tags" || true)
+
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "::notice::No payload release yet."
+            echo "::notice::Building against a stub payload. The Dockerfile is exercised; its contents are not."
+            printf 'stub payload -- not a real artifact\n' > payload/STUB
+            exit 0
+          fi
+
+          # THE NEWEST COMPLETE RELEASE, NOT THE NEWEST RELEASE. A release
+          # published before its assets finish uploading carries an incomplete
+          # asset list for a few minutes. This is the required check on every
+          # pull request and it must not go red for somebody else's upload
+          # window; the publish job waits out the same window instead, because
+          # there it is that release being published.
+          tag=""
+          for candidate in "${candidates[@]}"; do
+            names="$(gh release view "$candidate" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq '.assets[] | select(.state == "uploaded") | .name')"
+            tarballs="$(printf '%s\n' "$names" | grep -c "^${PAYLOAD_BASENAME}-.*\.tar\.gz$" || true)"
+            checksums="$(printf '%s\n' "$names" | grep -c "^${PAYLOAD_BASENAME}-.*\.sha256$" || true)"
+            if [ "$tarballs" -eq 1 ] && [ "$checksums" -eq 1 ]; then
+              tag="$candidate"
+              break
+            fi
+            echo "[INFO] skipping release ${candidate}: ${tarballs} uploaded tarball(s), ${checksums} checksum(s)"
+          done
+
+          if [ -z "$tag" ]; then
+            echo "::error::None of the ${#candidates[@]} most recent releases on ${GITHUB_REPOSITORY} carries exactly one uploaded ${PAYLOAD_BASENAME}-*.tar.gz and one .sha256."
+            echo "::error::Releases must be created as a draft, have their assets uploaded, and only then be published. See README.md."
+            exit 1
+          fi
+
+          echo "[INFO] using payload release ${tag}"
+          mkdir -p payload-download
+          gh release download "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${PAYLOAD_BASENAME}-*" \
+            --dir payload-download
+          ls -l payload-download
+          cd payload-download
+          # EXACTLY ONE OF EACH, asserted rather than globbed into a command.
+          # `tar -xzf dir/*.tar.gz` treats the first match as the archive and
+          # every later one as a member name to extract, and an unmatched glob
+          # is passed through literally -- so both the two-asset and the
+          # zero-asset case fail somewhere other than where the problem is.
+          shopt -s nullglob
+          tarballs=("${PAYLOAD_BASENAME}"-*.tar.gz)
+          checksums=("${PAYLOAD_BASENAME}"-*.sha256)
+          shopt -u nullglob
+          if [ "${#tarballs[@]}" -ne 1 ] || [ "${#checksums[@]}" -ne 1 ]; then
+            echo "::error::Release ${tag} must carry exactly one ${PAYLOAD_BASENAME}-*.tar.gz and one .sha256; found ${#tarballs[@]} and ${#checksums[@]}."
+            exit 1
+          fi
+          sha256sum --check -- "${checksums[0]}"
+          tar -xzf "${tarballs[0]}" -C ../payload
+          cd ..
+          # A COUNT, NOT A LISTING. This repository's run logs are public and
+          # the payload is built elsewhere; its file names are not ours to
+          # publish. `ls -l payload-download` above is fine -- those names come
+          # from PAYLOAD_BASENAME, which is set in this file.
+          echo "[INFO] payload file count: $(find payload -type f | wc -l)"
+
+      - name: Build the image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          # Snowpark Container Services runs linux/amd64. Anything else is
+          # dead weight here. (UNVERIFIED, and worth checking before anyone
+          # adds a platform: whether Snowflake's image repository accepts a
+          # multi-platform manifest list at all.)
+          platforms: linux/amd64
+          push: false
+          # No attestations on a throwaway build: nothing is published, and
+          # they cost build time on every pull request.
+          provenance: false
+          sbom: false
+
+  # ---------------------------------------------------------------------------
+  # Release: build, push to GHCR, sign, attest.
+  # ---------------------------------------------------------------------------
+  docker-publish-release:
+    name: docker publish (release)
+    if: github.event_name == 'release'
+    permissions:
+      # attestations + id-token: SLSA build provenance and the SBOM attestation.
+      # packages: push to ghcr.io/senzing/*. This is the one case GHCR accepts
+      #   the workflow's own GITHUB_TOKEN -- the package belongs to this
+      #   workflow's own organization. No PAT, nothing to rotate.
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # FIRST, so every later failure can still be announced.
+      #
+      # The notification below is conditional on the token existing, and a
+      # step's own `env:` is not visible to that step's `if:` -- so the token
+      # has to be read somewhere else. Read it into THIS step and publish a
+      # boolean, rather than a job-level `env:` that would also hand it to the
+      # third-party build action.
+      - name: Check whether Slack is configured
+        id: slack
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SLACK_BOT_TOKEN:-}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SLACK_BOT_TOKEN is not set; a failed release will not be announced."
+          fi
+
+      # `github.event.release.tag_name` is used verbatim as the image tag, and
+      # the build action is the first thing that would reject a bad one --
+      # after the immutability check and the payload download. Fail here.
+      #
+      # NARROWER than Docker's `[A-Za-z0-9_][A-Za-z0-9._-]{0,127}` on purpose.
+      # This repository releases bare semver -- the concurrency notes here and
+      # in the other two workflows already rely on it -- and the Docker
+      # grammar alone would pass `latest` or `main`, which are wrong here for
+      # reasons the registry cannot see.
+      #
+      # NO LEADING ZEROS. `sort -V` orders `01.0.0` before `1.0.0` while the
+      # `:latest` decision below compares the winner as a string, so both
+      # could publish as different image tags with one of them permanently
+      # unable to take `:latest`.
+      #
+      # NO pre-release, in EITHER of the two forms it comes in. A `-rc1`
+      # suffix on the tag is caught by the grammar above; GitHub's "Set as a
+      # pre-release" checkbox is not part of the tag at all, so `3.0.0` ticked
+      # that way passes every string test here. Both are rejected for the same
+      # reason: the bare-semver, non-pre-release filter that decides `:latest`
+      # below would drop the release from the ordering, so the image could
+      # never take `:latest` and nothing would say why.
+      - name: Validate the release
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Release tag '${TAG}' is not bare semver."
+            echo "::error::It becomes this image's Docker tag, so it must be MAJOR.MINOR.PATCH with no leading zeros and no pre-release suffix, e.g. 1.0.0."
+            exit 1
+          fi
+          if [ "$PRERELEASE" = "true" ]; then
+            echo "::error::Release ${TAG} is marked as a pre-release."
+            echo "::error::Pre-releases are not published from here: the :latest ordering excludes them, so this image could never take :latest. Clear 'Set as a pre-release' on the release and publish it again, or cut a normal release."
+            exit 1
+          fi
+          echo "[INFO] release ${TAG} is a bare-semver, non-pre-release version"
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # GHCR namespaces are lowercase; this organization is spelled `Senzing`.
+      # `ghcr.io/Senzing/...` is a 403, not a 404, so get this wrong and the
+      # failure reads as a permissions problem.
+      - name: Resolve image coordinates
+        id: image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          owner_lc="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          name="$(basename "$REPO")"
+          echo "repository=${owner_lc}/${name}" >> "$GITHUB_OUTPUT"
+          echo "[INFO] image repository: ${owner_lc}/${name}"
+
+      # A PUBLISHED VERSION IS NEVER REPUBLISHED.
+      #
+      # The tag ruleset stops a new tag being created by anyone but the publish
+      # App, and a second ruleset stops an existing tag being moved or deleted.
+      # Neither stops someone with write access creating a SECOND RELEASE on a
+      # tag that already exists, attaching a different asset, and triggering
+      # this job -- which would put different bytes behind a version that has
+      # already shipped, with a valid signature and an honest attestation.
+      #
+      # The registry is the thing that can answer "has this version already
+      # shipped", so ask it. This is the control; the rulesets are upstream of
+      # it, not a substitute for it.
+      - name: Refuse to overwrite a published version
+        env:
+          GH_TOKEN_FOR_REGISTRY: ${{ secrets.GITHUB_TOKEN }}
+          # NOT `github.actor`. This job is triggered by a release that a
+          # GitHub App created, so `github.actor` is `<app-slug>[bot]` --
+          # square brackets and all. GHCR authenticates on the token, not the
+          # username, but a deterministic value avoids finding out the hard
+          # way which characters the login accepts.
+          REGISTRY_USER: ${{ github.repository_owner }}
+          IMAGE: ghcr.io/${{ steps.image.outputs.repository }}
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN_FOR_REGISTRY" \
+            | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+
+          set +e
+          inspect_error="$(docker manifest inspect "${IMAGE}:${VERSION}" 2>&1 >/dev/null)"
+          inspect_rc=$?
+          set -e
+
+          if [ "$inspect_rc" -eq 0 ]; then
+            echo "::error::${IMAGE}:${VERSION} already exists. A published version is immutable; cut a new version instead."
+            exit 1
+          fi
+
+          # A NON-ZERO EXIT IS NOT THE SAME AS "DOES NOT EXIST". Discarding
+          # stderr made a 503, a rate limit or an expired token read as
+          # "proceed", the one direction this control must never fail in, so
+          # only a recognized not-found passes. `denied` is on the list because
+          # GHCR will not disclose whether a repository exists -- the first
+          # publish of a package answers `denied`, not `manifest unknown`; it
+          # would also cover an authorization failure, but `docker login` runs
+          # above under `set -e` and fails the step first.
+          case "$(printf '%s' "$inspect_error" | tr '[:upper:]' '[:lower:]')" in
+            *"manifest unknown"* | *"not found"* | *"denied"*) ;;
+            *)
+              echo "::error::Cannot establish whether ${IMAGE}:${VERSION} already exists: docker manifest inspect exited ${inspect_rc} with: ${inspect_error}"
+              echo "::error::Refusing to publish on an unanswered immutability check. Re-run once the registry is reachable."
+              exit 1
+              ;;
+          esac
+
+          echo "[INFO] ${IMAGE}:${VERSION} does not exist yet (registry said: ${inspect_error})"
+
+      # `release: published` FIRES ON THE RELEASE, NOT ON ITS ASSETS.
+      # Create the release and upload afterwards and this job starts between
+      # the two, finding no asset to download. The publishing order in
+      # README.md -- create as a DRAFT, upload, then publish -- closes that
+      # window at the source; this wait is the backstop for a release cut the
+      # other way round, and the only thing it can turn into is a clear error.
+      # The bound is a guess: no payload build exists yet to measure an upload
+      # against.
+      - name: Download the release payload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          echo "[INFO] using payload release ${TAG}"
+
+          attempt=1
+          max_attempts=20
+          while true; do
+            # An asset's `state` is `open` while it is still uploading and
+            # `uploaded` once it is complete, so a half-written asset does not
+            # end the wait. Names are filtered in the shell rather than in
+            # `--jq`, which has no way to take a shell variable.
+            names="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq '.assets[] | select(.state == "uploaded") | .name')"
+            tarballs="$(printf '%s\n' "$names" | grep -c "^${PAYLOAD_BASENAME}-.*\.tar\.gz$" || true)"
+            checksums="$(printf '%s\n' "$names" | grep -c "^${PAYLOAD_BASENAME}-.*\.sha256$" || true)"
+            if [ "$tarballs" -eq 1 ] && [ "$checksums" -eq 1 ]; then
+              break
+            fi
+            # WAITING ONLY HELPS A COUNT THAT IS SHORT. A count above one is
+            # a malformed release and cannot come down, so spending the whole
+            # retry budget on it just delays the same error by five minutes.
+            if [ "$tarballs" -gt 1 ] || [ "$checksums" -gt 1 ]; then
+              echo "::error::Release ${TAG} carries ${tarballs} ${PAYLOAD_BASENAME}-*.tar.gz and ${checksums} .sha256; expected at most one of each. Remove the extra asset and re-run."
+              exit 1
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "::error::Release ${TAG} has ${tarballs} uploaded ${PAYLOAD_BASENAME}-*.tar.gz and ${checksums} .sha256; expected one of each."
+              echo "::error::Releases must be created as a draft, have their assets uploaded, and only then be published. See README.md."
+              exit 1
+            fi
+            echo "[INFO] waiting for release assets (attempt ${attempt}/${max_attempts}): ${tarballs} tarball(s), ${checksums} checksum(s)"
+            attempt=$((attempt + 1))
+            sleep 15
+          done
+
+          mkdir -p payload-download
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${PAYLOAD_BASENAME}-*" \
+            --dir payload-download
+          ls -l payload-download
+
+      # THE CHECKSUM IS INTEGRITY, NOT AUTHENTICITY. It travels with the
+      # tarball on the same release, so anyone who can attach one asset can
+      # attach both. It catches a truncated or corrupted download and nothing
+      # else. Making this a real authenticity check needs the payload to carry
+      # its own build-provenance attestation and a `gh attestation verify
+      # --repo <payload build repo>` here; neither the payload build nor the
+      # repository it will live in exists yet, so there is nothing to pin to.
+      - name: Verify and unpack the payload
+        run: |
+          set -euo pipefail
+          mkdir -p payload
+          cd payload-download
+          # See the pull request job: exactly one of each, asserted.
+          shopt -s nullglob
+          tarballs=("${PAYLOAD_BASENAME}"-*.tar.gz)
+          checksums=("${PAYLOAD_BASENAME}"-*.sha256)
+          shopt -u nullglob
+          if [ "${#tarballs[@]}" -ne 1 ] || [ "${#checksums[@]}" -ne 1 ]; then
+            echo "::error::Release must carry exactly one ${PAYLOAD_BASENAME}-*.tar.gz and one .sha256; found ${#tarballs[@]} and ${#checksums[@]}."
+            exit 1
+          fi
+          sha256sum --check -- "${checksums[0]}"
+          tar -xzf "${tarballs[0]}" -C ../payload
+          # See the note on the pull request job: a count, not a listing. These
+          # logs are public and the payload's file names are not ours.
+          echo "[INFO] payload file count: $(find ../payload -type f | wc -l)"
+
+      # `:latest` MUST NAME THE HIGHEST PUBLISHED VERSION, and a release event
+      # cannot tell on its own whether it is that version -- `1.0.1` published
+      # after `2.0.0` is a perfectly valid tag on an older line. GitHub's own
+      # notion of "the latest release" is the most recent by date, which
+      # answers a different question, so the ordering has to be computed here.
+      - name: Decide whether this release takes :latest
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Separated from the filter for the same reason as the pull request
+          # job: a failed call must not read as "no releases". It also keeps
+          # `pipefail` from turning grep's no-match exit into a step failure.
+          if ! gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+            --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' \
+            >"${RUNNER_TEMP}/releases" 2>"${RUNNER_TEMP}/releases.err"; then
+            echo "::error::Cannot list releases on ${GITHUB_REPOSITORY}; cannot tell whether ${VERSION} takes :latest."
+            cat "${RUNNER_TEMP}/releases.err"
+            exit 1
+          fi
+
+          # Same bare-semver filter the tag validation above enforces, so the
+          # release that triggered this job is always in the ordering.
+          highest="$(grep -E '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' "${RUNNER_TEMP}/releases" \
+            | sort -V | tail -n 1 || true)"
+
+          if [ "$highest" = "$VERSION" ]; then
+            echo "[INFO] ${VERSION} is the highest published version; it takes :latest."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::${VERSION} is not the highest published version (${highest:-none}); leaving :latest where it is."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ATTESTATIONS ARE CORRECT HERE. DO NOT STRIP THEM AGAIN.
+      #
+      # We rejected SLSA build provenance on an earlier workflow, and the
+      # reason does not apply to this one. That workflow only copied bytes
+      # between registries: attesting "this was built here" would have been a
+      # false statement about an image this estate did not build.
+      #
+      # This job genuinely builds the image -- it runs the Dockerfile in this
+      # repository over the payload it unpacked above. Build provenance, the
+      # SBOM attestation and the cosign signature are honest claims about work
+      # that actually happened on this runner, and every identifier they
+      # record names THIS repository, which is public.
+      #
+      # What they do NOT claim is anything about where the payload came from.
+      # The checksum step above is integrity only (see its note), so these
+      # attestations say "this image was built here from these bytes", not
+      # "these bytes are the ones the payload build produced".
+      #
+      # One thing to keep true: provenance is `mode=max`, which records build
+      # arguments and the build environment. Never pass anything about where
+      # the payload was built as a build arg, or it lands in a public
+      # attestation and in the image config's ARG/ENV history, which no
+      # provenance setting suppresses.
+      - name: Build, push, sign and attest
+        # `@v2` floats deliberately -- hash-pin what we do not own, float what
+        # we do, and this one is ours (.github/linters/zizmor.yaml encodes it).
+        # So nothing here pins a commit: the note below records what `v2`
+        # resolved to when it was read, not what will run.
+        uses: senzing-factory/github-action-docker-buildx-build@v2
+        with:
+          image-repository: ${{ steps.image.outputs.repository }}
+          image-tag: ${{ github.event.release.tag_name }}
+          # `login-to-dockerhub` is a misnomer in this action: it is the
+          # generic registry login, and `registry-server` decides which one.
+          login-to-dockerhub: true
+          registry-server: ghcr.io
+          # See the registry-user note above: `github.actor` is the App's bot
+          # login on a release event, not a person.
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          platforms: linux/amd64
+          push: true
+          sign-image: true
+          # The payload is already unpacked into the build context above, so
+          # the action must not check out over it.
+          skip-checkout: true
+          # `:latest` is pushed only when this release is the highest
+          # published version -- see the step above.
+          #
+          # THIS REQUIRES A SHARED ACTION THAT TAKES THE SBOM AGAINST THE
+          # DIGEST, and `v2` has carried that since 2.3.0 (moved 2026-10-29,
+          # senzing-factory/github-action-docker-buildx-build#129). Before it,
+          # `attestations/action.yaml` handed `anchore/sbom-action` the image
+          # with no tag, so syft resolved `:latest` -- and withholding the tag
+          # would then have attached an SBOM of whatever image still held it.
+          #
+          # Why that mattered here rather than in general: the first release
+          # is unaffected either way, because it IS the highest version, so
+          # `skip` is false and `:latest` is this build. The first BACKPORT is
+          # where it bit, silently -- `skip` becomes true, syft describes the
+          # older image, and that SBOM is attested against the new digest.
+          # So pinning this caller below 2.3.0 reintroduces it.
+          skip-latest-tag: ${{ steps.latest.outputs.skip }}
+
+      - name: Notify Slack on failure
+        # A release build publishes and nobody is watching it. A pull request
+        # build has a developer looking right at it, so it is silent by design.
+        #
+        # Guarded on the boolean computed in the first step, so the token
+        # itself reaches only that step and this one. `SLACK_BOT_TOKEN` and
+        # `SLACK_CHANNEL` are `Senzing` ORG secrets and whether they are
+        # visible to this repository has NOT been confirmed -- the sandbox
+        # credential cannot read org secrets (403). Unguarded, an absent token
+        # turns a failed release into TWO red jobs, the second one about
+        # Slack, which buries the first.
+        if: ${{ (failure() || cancelled()) && steps.slack.outputs.configured == 'true' }}
+        uses: senzing-factory/build-resources/slack-failure-notification@v4
+        with:
+          job-status: ${{ job.status }}
+          slack-channel: ${{ secrets.SLACK_CHANNEL }}
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          # The REPOSITORY only. This step runs on failure(), which includes
+          # the run where "Validate the release" rejected the tag -- passing
+          # `release.tag_name` here would hand the one input the workflow
+          # refused to trust straight to another action's input.
+          additional-info: "ghcr.io/${{ steps.image.outputs.repository }}"
+
+  # ---------------------------------------------------------------------------
+  # Manual: point `:latest` at the highest published version. Recovery only.
+  # ---------------------------------------------------------------------------
+  # `:latest` is set only by a release that is the highest one at the moment
+  # it publishes, and nothing repairs a miss. Anything that fails AFTER the
+  # push -- signing, attestation, verification, the Slack step, which is where
+  # the shared action's own failures live -- leaves `:latest` behind, and from
+  # then on re-running that release is refused by the immutability check above
+  # while a later release on a lower line declines `:latest` of its own
+  # accord.
+  #
+  # This job publishes no bytes. `imagetools create` copies a manifest that is
+  # already in the registry onto a second tag, so it cannot invent an image,
+  # and it takes no input -- the version is computed exactly as the release
+  # path computes it, so a dispatch cannot nominate an arbitrary one. Running
+  # it when nothing is wrong is a no-op.
+  repoint-latest:
+    name: repoint latest (manual)
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # Same lowercasing as the publish job: GHCR namespaces are lowercase and
+      # this organization is spelled `Senzing`.
+      - name: Resolve image coordinates
+        id: image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          owner_lc="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          name="$(basename "$REPO")"
+          echo "repository=${owner_lc}/${name}" >> "$GITHUB_OUTPUT"
+          echo "[INFO] image repository: ${owner_lc}/${name}"
+
+      - name: Point latest at the highest published version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.repository_owner }}
+          IMAGE: ghcr.io/${{ steps.image.outputs.repository }}
+        run: |
+          set -euo pipefail
+          # Separated from the filter for the same reason as the publish job:
+          # a failed call must not read as "no releases".
+          if ! gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+            --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' \
+            >"${RUNNER_TEMP}/releases" 2>"${RUNNER_TEMP}/releases.err"; then
+            echo "::error::Cannot list releases on ${GITHUB_REPOSITORY}; cannot tell which version :latest should name."
+            cat "${RUNNER_TEMP}/releases.err"
+            exit 1
+          fi
+
+          highest="$(grep -E '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' "${RUNNER_TEMP}/releases" \
+            | sort -V | tail -n 1 || true)"
+          if [ -z "$highest" ]; then
+            echo "::error::No bare-semver release on ${GITHUB_REPOSITORY}; there is nothing for :latest to point at."
+            exit 1
+          fi
+          echo "[INFO] highest published version: ${highest}"
+
+          printf '%s' "$GH_TOKEN" \
+            | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+
+          # A tag that was never published is the interesting failure here:
+          # it means the release exists but its build did not get as far as
+          # the push, and copying is not the repair.
+          if ! target="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${IMAGE}:${highest}" 2>"${RUNNER_TEMP}/inspect.err")"; then
+            echo "::error::${IMAGE}:${highest} is not in the registry, so :latest cannot be pointed at it. Re-run that release's build instead."
+            cat "${RUNNER_TEMP}/inspect.err"
+            exit 1
+          fi
+
+          current="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${IMAGE}:latest" 2>/dev/null || true)"
+          if [ "$current" = "$target" ]; then
+            echo "[INFO] ${IMAGE}:latest already names ${highest} (${target}); nothing to do."
+            exit 0
+          fi
+
+          echo "[INFO] moving ${IMAGE}:latest from ${current:-nothing} to ${highest} (${target})"
+          # By digest, not by tag: nothing can move under this between the
+          # inspect above and the copy.
+          docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}@${target}"
+          echo "[INFO] ${IMAGE}:latest now names ${highest} (${target})"
