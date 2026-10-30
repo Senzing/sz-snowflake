@@ -1,3 +1,11 @@
+<p>
+  <img src="../assets/senzing-logo.jpg" alt="Senzing" width="48" align="left" hspace="8">
+  <samp><b>SENZING</b></samp>
+</p>
+<br clear="left">
+
+[sz-snowflake](../README.md) / Troubleshooting
+
 # Troubleshooting
 
 Start with the one view that summarizes everything:
@@ -9,6 +17,8 @@ SELECT * FROM SZ_SNOWFLAKE.API.SZ_HEALTH;   -- APP_USER: OVERALL, WARNINGS, one 
 `OVERALL` is `OK`, `WARN` or `FAIL`; `WARNINGS` lists every failing or warning check by
 the codes below.
 
+<sub><b>FIRST STOP</b></sub>
+
 ## Where to look
 
 | Failure | Read |
@@ -19,11 +29,17 @@ the codes below.
 | the capture task | `SZ_HEALTH.CAPTURE_TASK_STATE`, `CAPTURE_LAST_ERROR`, `SOURCE_ERRORS`; `SZ_WATCH` refreshes them every 10 minutes |
 | the replica | `SELECT INSTANCE, APPLY_SECS, ENTITIES_LIVE FROM SZ_SNOWFLAKE.SZ.SZ_APPLY_LOG ORDER BY APPLIED_AT DESC LIMIT 20` |
 
+<sub><b>BY SYMPTOM</b></sub>
+
 ## Symptoms
 
 | Symptom | Cause and fix |
 |---|---|
 | The setup job or a service cannot reach Postgres (`pg_connect`, a 10 s connect timeout) | a missing or stale ingress rule: a connect timeout, never a refusal. `CALL SZ_INFRA_DB.SZ_INFRA.SZ_REFRESH_PG_INGRESS()` and check `SZ_PG_INGRESS_TASK` is `started`; the egress rule must name exactly `<PG_HOST>:5432` |
+| `SZ_REGISTER_SOURCE` raises `-20203` / `-20204`: `... is not bound in SOURCE_VIEWS` (or `SOURCE_TABLES`) | the view or table you named has no binding (or the name differs: it must be the full `DB.SCHEMA.NAME`); run the `REGISTER_REFERENCE` call the message names, then register again |
+| `SZ_CONFIGURE` raises `-20023` | nothing was changed; the message lists every bad name or value. Fix them all and call it again |
+| `SZ_SETUP` seems to hang | it is one blocking call (2 to 5 minutes). In another worksheet, `SELECT SETUP_PHASE, SETUP_RUNNING_SECS FROM SZ_SNOWFLAKE.API.SZ_HEALTH`: `waiting_for_job_container` means the pool is bringing up a node or pulling the image; any other value is the job's phase. Afterwards the result's `timing` (and `SZ_SETUP_LOG.RESULT:phases`) says which phase took the time |
+| results do not appear (`RESOLVE_STATE` stays `WAITING_FOR_CAPTURE` or `RESOLVING`) | `WAITING_FOR_CAPTURE`: the capture task has not cut the keys yet (it waits up to `CUT_MAX_AGE_SECS`; check `CAPTURE_TASK_STATE` is `started`); `RESOLVING`: batches wait for the resolver (`BATCHES_READY`, `SERVICE_STATE`) or results for the replicator; `OVERALL` names any failure |
 | `SZ_REGISTER_SOURCE` returns `capture_state FAILED` with an `owner_statements` entry | change tracking is off on a source table. The statement names the `SOURCE_TABLES` alias; `SHOW REFERENCES IN APPLICATION SZ_SNOWFLAKE` maps it to the table; the owner runs `ALTER TABLE <table> SET CHANGE_TRACKING = TRUE`, then register again |
 | capture for one source stops (`SOURCES_FAILED` / `SOURCES_STALE`) | change tracking turned off after registration, or the stream went stale; `SOURCE_ERRORS` carries the fix; `SZ_REGISTER_SOURCE` again repairs it |
 | `SZ_SETUP` / `SZ_START` refuses with `-20109` (the Senzing End User License Agreement is not accepted) | read https://senzing.com/end-user-license-agreement/, then `CALL SZ_SNOWFLAKE.API.SZ_ACCEPT_EULA('I_ACCEPT_THE_SENZING_EULA')` as `APP_ADMIN` ([install](install.md#3-accept-the-senzing-eula)). After an upgrade it means the new release carries a new EULA version: accept again, then re-run (`SZ_UPGRADE` resumes at its step) |
@@ -49,6 +65,8 @@ the codes below.
 | exit 1 `deadline` | a lock wait or a hung server outlived the setup deadline (300 s by default) |
 | exit 1 `unsafe runtime login` | the `application` login holds a privilege it must not; `error` shows the ACL |
 | a job that never scheduled | `error` carries the pool's message (`Unschedulable ..`): raise `START_WAIT_SECS` or check `POOL_FAMILY` (an ARM family for `linux/arm64`) |
+
+<sub><b>REFERENCE</b></sub>
 
 ## `SZ_HEALTH` codes
 

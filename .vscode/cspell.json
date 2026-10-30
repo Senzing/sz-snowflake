@@ -48,19 +48,18 @@
     "Snowpark",
     "SPDXID",
     "startswith",
+    "streamlit",
+    "Streamlit",
     "syft",
     "tarball",
     "trivy",
     "UNVERIFIED",
     "useradd",
     "VARCHAR",
+    "WATCHLIST",
     "XSMALL",
     "yamllint",
     "zizmor"
   ],
-  "ignorePaths": [
-    ".git/**",
-    "payload/**",
-    "payload-download/**"
-  ]
+  "ignorePaths": [".git/**", "payload/**", "payload-download/**"]
 }

@@ -8,6 +8,12 @@
 
 **Entity resolution inside your own Snowflake account. Senzing hosts nothing and receives nothing.**
 
+> [!IMPORTANT]
+> **Public Preview.** sz-snowflake is provided as-is, without warranty of any kind and
+> without a support commitment. Its interfaces, settings and release files can change
+> between releases. Use is governed by the
+> [Senzing End User License Agreement](https://senzing.com/end-user-license-agreement/).
+
 Senzing entity resolution as a Snowflake Native App that you build and install
 yourself, running on Snowpark Container Services with Snowflake Postgres as the
 Senzing repository. Each release is **one download**: a signed bundle holding the app
@@ -109,6 +115,9 @@ A missing or stale ingress rule shows up as a 10 s connect timeout, not a refusa
 | 8 | Watch it resolve | [use](docs/use.md#watch-it-resolve) |
 | 9 | Settings, upgrade, teardown | [use](docs/use.md) |
 
+Prefer to have an AI assistant (Snowflake Cortex Code, Claude Code) run these steps and build a
+report on your results? See [install and report with an AI assistant](docs/ai-assisted.md).
+
 <sub><b>VERIFY</b></sub>
 
 ## Verify
@@ -136,16 +145,20 @@ it unpacks the bundle, and stops when one fails.
 ## Versions
 
 The Native App has one version per Senzing version (`V4_4_3`), and the build is its
-patch (`ADD PATCH 7 FOR VERSION V4_4_3`, label `'4.4.3-7'`). Within a Senzing version
-the app's procedures, functions, output tables, health columns and service functions
-change only additively; breaking changes come with the next Senzing version, as a new
-app version.
+patch (`ADD PATCH 7 FOR VERSION V4_4_3`, label `'4.4.3-7'`).
+
+**During the Public Preview, any release can make breaking changes**, a patch within the
+same Senzing version included: the app's procedures, functions, output tables, health
+columns, service functions, settings and release files. Read the
+[CHANGELOG](CHANGELOG.md) before you upgrade. Once out of preview, changes within a
+Senzing version will be additive only, and breaking changes will come with the next
+Senzing version, as a new app version.
 
 <sub><b>LICENSE</b></sub>
 
 ## License
 
-The software is licensed under the
+sz-snowflake is a Public Preview, provided as-is. The software is licensed under the
 [Senzing End User License Agreement](https://senzing.com/end-user-license-agreement/).
 Installing the Senzing packages in the images accepts it, and the app asks you to accept
 it too before it runs anything: `SZ_SETUP` and `SZ_START` refuse until an `APP_ADMIN`
