@@ -1,67 +1,154 @@
+<p>
+  <img src="assets/senzing-logo.jpg" alt="Senzing" width="48" align="left" hspace="8">
+  <samp><b>SENZING</b></samp>
+</p>
+<br clear="left">
+
 # sz-snowflake
 
-Container build for Senzing on Snowflake.
+**Entity resolution inside your own Snowflake account. Senzing hosts nothing and receives nothing.**
 
-This repository holds the `Dockerfile` for the Senzing-on-Snowflake evaluation
-container and publishes it to `ghcr.io/senzing/sz-snowflake`.
+Senzing entity resolution as a Snowflake Native App that you build and install
+yourself, running on Snowpark Container Services with Snowflake Postgres as the
+Senzing repository. Each release is **one download**: a signed bundle holding the app
+files and the three container images, which you push to your own Snowflake image
+repository. No source code is published, and nothing is pulled from a public registry.
 
-The application payload is built elsewhere and arrives here as a release asset.
-Each release on this repository carries
-`sz-snowflake-payload-<version>.tar.gz` and its `.sha256`; publishing a release
-is what triggers the image build. The build verifies the checksum, unpacks the
-payload into the build context, and pushes a signed, attested image tagged with
-the release's version. The release creates the tag at `main` as it stood at
-that moment rather than at a nominated commit; the commit the image was
-actually built from is recorded in its build provenance attestation.
+This page is the guide. The steps are in [docs/install.md](docs/install.md), day-to-day
+use in [docs/use.md](docs/use.md), and what to do when something fails in
+[docs/troubleshooting.md](docs/troubleshooting.md).
 
-## Cutting a release
+<sub><b>RELEASE ASSETS</b></sub>
 
-**Create the release as a draft, attach the assets, and publish it last.**
-The image build triggers on `release: published`, so a release that is
-published before its assets are attached starts a build that has nothing to
-download. The build waits a few minutes for the assets to appear and then
-fails.
+## What a release contains
 
-A release must carry exactly one `sz-snowflake-payload-<version>.tar.gz` and
-exactly one matching `.sha256`. The checksum is verified before the payload is
-unpacked; because both assets come from the same release, that is integrity
-against a bad download rather than proof of where the payload was built.
+| Asset | Content |
+|---|---|
+| `sz-snowflake-<release>.tar.gz` | the bundle, both architectures: `app/` (the Native App files: `manifest.yml`, `setup_script.sql`, `services/*.yaml`, `README.md`, `SHA256SUMS`), `images/<arch>/sz-snowflake-<role>.tar` (the three images for `amd64` and `arm64`, as docker archives), the infrastructure script and the install script |
+| `sz-snowflake-infra-<release>.sql` | the infrastructure script you run and own (Postgres instance, network rules, policy, integration, secrets), also on its own so you can read it before downloading the bundle |
+| `sz-snowflake-install-<release>.sh` | the package build and install steps, each printed before it runs |
+| `SHA256SUMS`, `*.sigstore.json` | checksums, and a keyless cosign signature for every file above |
 
-The `.sha256` must **name the tarball, by its basename alone**. The build runs
-`sha256sum --check` from the directory it downloaded the assets into, so a
-line carrying a path -- `<hex>  dist/sz-snowflake-payload-1.0.0.tar.gz` --
-fails on a file that is not there, and a file holding only a bare digest is
-rejected outright as having no properly formatted checksum line. Running
-`sha256sum` on the tarball from the directory that holds it produces the right
-thing, and so does `openssl dgst -r -sha256`. Plain `openssl dgst -sha256`
-does not: OpenSSL 3 writes `SHA2-256(file)= <hex>`, which GNU
-`sha256sum --check` rejects outright as having no properly formatted checksum
-line. The BSD-style `SHA256 (file) = <hex>` and the OpenSSL 1.x
-`SHA256(file)= <hex>` both read correctly.
+Some releases may instead carry one bundle per architecture,
+`sz-snowflake-<release>-linux-<arch>.tar.gz`; the steps are the same.
 
-The tag must be bare semver -- `1.0.0`, with no `v` prefix, no leading zeros
-and no pre-release suffix -- because it becomes the image tag. The release
-must also not be marked **Set as a pre-release**: that is a checkbox rather
-than part of the tag, so it passes every test the tag string can make, and it
-is rejected for the same reason a `-rc1` suffix is -- the `:latest` ordering
-excludes pre-releases, so such an image could never take `:latest`. Publishing
-a version that already exists in the registry is refused.
+A release is named `<senzing_version>-<build>`, for example `4.4.3-7`: the Senzing
+version it carries and a build counter that restarts at 1 for each Senzing version.
+`4.4.3-10` is a later build than `4.4.3-7`.
 
-## `:latest`
+<sub><b>CONTAINERS</b></sub>
 
-`:latest` is pushed only when the release being published is the highest
-published version on this repository, so releasing a patch on an older line
-does not move it backwards.
+## Images
 
-A build that fails **before** the image is pushed leaves nothing behind and
-can be re-run from the release. A build that fails **after** the push --
-signing, attestation, verification or the notification step, which is where
-the shared action's own failures live -- cannot: the version is in the
-registry, so re-running hits the immutability refusal, and no later release
-repairs `:latest`, because a release on a lower line declines it too.
+| Image | Runs as | Does |
+|---|---|---|
+| `sz-snowflake-setup` | job | creates and migrates the Postgres side; the only image that runs DDL |
+| `sz-snowflake-resolver` | service, N instances | loads changed records into Senzing |
+| `sz-snowflake-replicator` | service, M instances | writes resolved entities back to Snowflake tables |
 
-Recover by running the **Docker build and publish** workflow manually from the
-Actions tab. It builds and pushes nothing; it copies the manifest of the
-highest published version onto `:latest` inside the registry. It takes no
-input, so it cannot be pointed at an arbitrary image, and running it when
-nothing is wrong does nothing.
+All three: base `gcr.io/distroless/cc-debian13:nonroot` (no shell, no package
+manager, uid 65532), built natively for each architecture, with the Senzing runtime at
+the version in the release's name. Each binary has a `version` command. The install
+script pushes the target architecture's three images to your image repository as
+`sz-snowflake-<role>:<release>`; use the ARM images with an ARM compute pool family.
+
+<sub><b>TRUST</b></sub>
+
+## Trust model
+
+| Rule | |
+|---|---|
+| Everything runs in your account | compute, Postgres, data, logs, status |
+| Senzing hosts nothing and receives nothing | Senzing publishes software only: these images and the release files |
+| No telemetry | no phone-home, license check or update check; the app declares no event definitions |
+| One egress | your own Postgres host on port 5432, through an external access integration you create and can disable at any time |
+| Your secrets stay yours | the app has `READ` only. Snowflake injects them into the containers as read-only files; they are never passed as environment variables, never logged, and read once at start (a rotation restarts the services) |
+| Your license is your secret | stored in your Snowflake secret; logs show only its expiry date and record limit |
+| No volumes | the containers read their image, the Snowflake session token and the injected secret files, and write two small TLS settings files for the Postgres client |
+
+<sub><b>NETWORK</b></sub>
+
+## Postgres exposure
+
+| Control | |
+|---|---|
+| TLS | `verify-full` against your account's own root CA |
+| Login | services use a DML-only login with a generated password; only the setup job uses the admin login |
+| Ingress | only your region's Snowflake egress ranges, refreshed daily by a task you own; never `0.0.0.0/0` |
+| **Exposure** | those ranges are shared by every Snowflake account in the region, so other tenants' containers can reach the endpoint; the generated password and `verify-full` TLS protect it |
+| Upgrade | same-account Private Link (Business Critical, AWS and Azure) removes that exposure; a change to one network rule |
+
+A missing or stale ingress rule shows up as a 10 s connect timeout, not a refusal.
+
+<sub><b>BEFORE YOU START</b></sub>
+
+## Prerequisites
+
+| Need | Note |
+|---|---|
+| A Snowflake account on AWS or Azure | Snowflake Postgres is not available on GCP |
+| A role that can create an application package and application, a Postgres instance, a network policy and an external access integration | `ACCOUNTADMIN` works; a delegated role is possible |
+| The Snowflake CLI (`snow`) and Docker (or `skopeo`, or `crane`) | Docker loads the bundle's images and pushes them to your image repository. Pin `snowflake-connector-python<5`: 5.x breaks the image-registry login (or log in to the registry yourself with a PAT) |
+| `cosign`, `sha256sum` | to verify the release files |
+| A Senzing license (base64) | optional; without one the engine stops at 500 records. Never put it in a committed file |
+| One release's files | download the bundle, `SHA256SUMS` and the `*.sigstore.json` files from this repository's [releases](https://github.com/Senzing/sz-snowflake/releases) |
+
+<sub><b>THE PATH</b></sub>
+
+## The path
+
+| # | Step | Where |
+|---|---|---|
+| 1 | Download the release and verify it | below |
+| 2 | Run the infrastructure script | [install](docs/install.md#1-run-the-infrastructure-script) |
+| 3 | Install: unpack, push the images, build the package, create the app | [install](docs/install.md#2-install-from-the-bundle) |
+| 4 | Accept the Senzing EULA, the first step after the app exists | [install](docs/install.md#3-accept-the-senzing-eula) |
+| 5 | Set the license secret | [install](docs/install.md#4-set-the-license-secret) |
+| 6 | Run setup and start | [install](docs/install.md#5-run-setup-and-start) |
+| 7 | Register a source | [use](docs/use.md#register-a-source) |
+| 8 | Watch it resolve | [use](docs/use.md#watch-it-resolve) |
+| 9 | Settings, upgrade, teardown | [use](docs/use.md) |
+
+<sub><b>VERIFY</b></sub>
+
+## Verify
+
+Everything a release carries is signed keyless as this repository's `sign-release`
+workflow at that release's tag. The identity is exact, so an older release's signature
+does not pass under a newer name.
+
+```bash
+sha256sum -c SHA256SUMS
+IDENTITY="https://github.com/Senzing/sz-snowflake/.github/workflows/sign-release.yaml@refs/tags/<release>"
+for f in SHA256SUMS sz-snowflake-<release>.tar.gz sz-snowflake-infra-<release>.sql sz-snowflake-install-<release>.sh; do
+  cosign verify-blob --bundle "$f.sigstore.json" \
+    --certificate-identity "$IDENTITY" \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com "$f"
+done
+```
+
+The signed bundle contains the images, so verifying it verifies them. The install script
+repeats these checks (`SHA256SUMS` and every signature, against the exact identity) before
+it unpacks the bundle, and stops when one fails.
+
+<sub><b>VERSIONING</b></sub>
+
+## Versions
+
+The Native App has one version per Senzing version (`V4_4_3`), and the build is its
+patch (`ADD PATCH 7 FOR VERSION V4_4_3`, label `'4.4.3-7'`). Within a Senzing version
+the app's procedures, functions, output tables, health columns and service functions
+change only additively; breaking changes come with the next Senzing version, as a new
+app version.
+
+<sub><b>LICENSE</b></sub>
+
+## License
+
+The software is licensed under the
+[Senzing End User License Agreement](https://senzing.com/end-user-license-agreement/).
+Installing the Senzing packages in the images accepts it, and the app asks you to accept
+it too before it runs anything: `SZ_SETUP` and `SZ_START` refuse until an `APP_ADMIN`
+runs `CALL SZ_SNOWFLAKE.API.SZ_ACCEPT_EULA('I_ACCEPT_THE_SENZING_EULA')`
+([install](docs/install.md#3-accept-the-senzing-eula)). More about Senzing:
+[senzing.com](https://senzing.com).
