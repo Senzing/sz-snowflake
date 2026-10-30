@@ -2,7 +2,9 @@
   "version": "0.2",
   "language": "en",
   "words": [
+    "ACCOUNTADMIN",
     "anchore",
+    "archs",
     "attestations",
     "brianmacy",
     "buildkit",
@@ -14,6 +16,7 @@
     "cosign",
     "cspell",
     "dgst",
+    "distroless",
     "dockerignore",
     "dpkg",
     "esac",
@@ -21,11 +24,13 @@
     "exfiltrated",
     "ghcr",
     "healthcheck",
+    "hspace",
     "jscpd",
     "keepachangelog",
     "kernelsam",
     "mapfile",
     "markdownlint",
+    "nonroot",
     "nullglob",
     "opencontainers",
     "pipefail",
@@ -36,6 +41,8 @@
     "senzingsdk",
     "shellcheck",
     "shopt",
+    "sigstore",
+    "skopeo",
     "SLSA",
     "Snowflake",
     "Snowpark",
@@ -46,8 +53,14 @@
     "trivy",
     "UNVERIFIED",
     "useradd",
+    "VARCHAR",
+    "XSMALL",
     "yamllint",
     "zizmor"
   ],
-  "ignorePaths": [".git/**", "payload/**", "payload-download/**"]
+  "ignorePaths": [
+    ".git/**",
+    "payload/**",
+    "payload-download/**"
+  ]
 }

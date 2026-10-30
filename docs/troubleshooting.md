@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with the one view that summarises everything:
+Start with the one view that summarizes everything:
 
 ```sql
 SELECT * FROM SZ_SNOWFLAKE.API.SZ_HEALTH;   -- APP_USER: OVERALL, WARNINGS, one column per check
