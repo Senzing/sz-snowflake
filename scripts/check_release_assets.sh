@@ -5,10 +5,12 @@
 # signs and publishes every file it finds.
 #   scripts/check_release_assets.sh <dir> <release> [--bundle combined|per-arch] [--platforms linux/amd64,linux/arm64]
 # Files: sz-snowflake-<release>.tar.gz (combined) or sz-snowflake-<release>-linux-<arch>.tar.gz
-# per platform (per-arch), sz-snowflake-infra-<release>.sql, sz-snowflake-install-<release>.sh and
-# SHA256SUMS, which must verify and list exactly the others. Each bundle is opened: its top
-# directory, app/ (the app files), images/<arch>/sz-snowflake-<role>.tar for every role of
-# every architecture it holds, and the infra SQL and install script, identical to the loose
+# per platform (per-arch), sz-snowflake-infra-<release>.sql, sz-snowflake-install-<release>.sh,
+# sz-snowflake-cord-data.tar.gz (the CORD data: one top directory sz-snowflake-cord-data/ with
+# README.md, load.sql and <source>/<table>.csv files, nothing else) and SHA256SUMS, which must
+# verify and list exactly the others. Each bundle is opened: its top
+# directory, app/ (the app files), images/<arch>/sz-snowflake-images.tar (the role images of
+# that architecture, one docker archive) for every architecture it holds, and the infra SQL and install script, identical to the loose
 # files. --bundle defaults to what the directory holds; --platforms to both architectures.
 set -euo pipefail
 
@@ -39,6 +41,8 @@ deliverables=()
 if [ "$mode" = combined ]; then deliverables+=("sz-snowflake-$release.tar.gz")
 else for a in "${archs[@]}"; do deliverables+=("sz-snowflake-$release-linux-$a.tar.gz"); done; fi
 deliverables+=("sz-snowflake-infra-$release.sql" "sz-snowflake-install-$release.sh")
+cord=sz-snowflake-cord-data.tar.gz
+deliverables+=("$cord")
 
 actual="$(find "$dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)"
 expected="$(printf '%s\n' "${deliverables[@]}" SHA256SUMS | LC_ALL=C sort)"
@@ -61,9 +65,29 @@ $want"
   (cd "$dir" && "${sum[@]}" -c SHA256SUMS >/dev/null 2>&1) || err "SHA256SUMS does not verify"
 fi
 
+# The CORD data: one top directory, the README and load script, and CSV files one level down.
+if [ -s "$dir/$cord" ]; then
+  if cord_members="$(tar -tzf "$dir/$cord" 2>/dev/null)"; then
+    top="${cord%.tar.gz}"
+    for m in "$top/README.md" "$top/load.sql"; do
+      grep -qxF "$m" <<< "$cord_members" || err "$cord lacks $m"
+    done
+    grep -qE "^$top/[a-z_]+/[A-Za-z_]+\.csv\$" <<< "$cord_members" || err "$cord holds no CSV files"
+    while IFS= read -r m; do
+      case "$m" in
+        "$top/" | "$top/README.md" | "$top/load.sql") ;;
+        "$top"/*/) [[ "$m" =~ ^$top/[a-z_]+/$ ]] || err "$cord carries the unexpected member $m" ;;
+        *) [[ "$m" =~ ^$top/[a-z_]+/[A-Za-z_]+\.csv$ ]] || err "$cord carries the unexpected member $m" ;;
+      esac
+    done <<< "$cord_members"
+  else
+    err "$cord is not a readable tar.gz"
+  fi
+fi
+
 # Each bundle: one top directory with exactly the layout.
 for f in "${deliverables[@]}"; do
-  case "$f" in *.tar.gz) ;; *) continue ;; esac
+  case "$f" in "$cord") continue ;; *.tar.gz) ;; *) continue ;; esac
   [ -s "$dir/$f" ] || continue
   name="${f%.tar.gz}"
   members="$(tar -tzf "$dir/$f" 2>/dev/null)" || { err "$f is not a readable tar.gz"; continue; }
@@ -73,7 +97,7 @@ for f in "${deliverables[@]}"; do
         "$name/app/services/setup.yaml" "$name/app/services/resolver.yaml" "$name/app/services/replicator.yaml"
         "$name/sz-snowflake-infra-$release.sql" "$name/sz-snowflake-install-$release.sh")
   for a in "${bundle_archs[@]}"; do
-    for role in "${roles[@]}"; do need+=("$name/images/$a/sz-snowflake-$role.tar"); done
+    need+=("$name/images/$a/sz-snowflake-images.tar")
   done
   for m in "${need[@]}"; do
     grep -qxF "$m" <<< "$members" || err "$f lacks $m"
