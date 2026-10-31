@@ -5,13 +5,16 @@ All notable changes to this project will be documented in this file.
 The changelog format is based on [Keep a Changelog] and [CommonMark].
 
 Versions here are the releases of Senzing on Snowflake, `<senzing_version>-<build>`
-(for example `4.4.2-7`): the Senzing version the release carries and a build counter
-that restarts at 1 for each Senzing version. Nothing has been released yet, so every
-entry below is unreleased.
+(for example `4.4.3-1`): the Senzing version the release carries and a build counter
+that restarts at 1 for each Senzing version.
 
 ## [Unreleased]
 
-### Added to Unreleased
+Nothing yet.
+
+## [4.4.3-1] - 2026-10-30
+
+### Added
 
 - Public Preview: sz-snowflake is provided as-is, without warranty or a support commitment;
   interfaces, settings and release files can change between releases.
