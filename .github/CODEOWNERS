@@ -2,10 +2,5 @@
 #
 # Branch protection on main requires code-owner review. That requirement is
 # inert without this file, so every path needs an owner with write access.
-#
-# Restored 2026-10-31. It was removed in the release-bundle change and the
-# requirement stayed on, so between then and now main had a review gate that
-# could not be satisfied. Owner changed from @Senzing/senzing-engineering to
-# the Rust team, which is who maintains this.
 
 * @Senzing/senzing-rust-developers
