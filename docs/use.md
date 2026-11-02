@@ -15,7 +15,7 @@ roles are `APP_ADMIN` (operates) and `APP_USER` (reads health and the results).
 
 ## Register a source
 
-You need a mapping view with `DATA_SOURCE`, `RECORD_ID` (VARCHAR) and `JSON_DOC`
+You need a mapping view with `DATA_SOURCE`, `RECORD_ID` (VARCHAR) and `RECORD_JSON`
 (OBJECT/VARIANT) in the Senzing entity specification. An AI assistant can draft it with the
 Senzing MCP `mapping_workflow`. Bind the view and its base tables as references (only you
 can bind a reference), then register the source by name:
@@ -37,7 +37,34 @@ for the view, `-20204` for a table) with the `REGISTER_REFERENCE` call to run.
 `<CODE>` matches `^[A-Z0-9_-]{1,64}$` and equals the view's `DATA_SOURCE`; give one entry
 per base table. Every argument is checked before anything is created, so a bad second
 table never leaves a half-registered source. The install script does all of this with
-`--source <CODE>=<view>:<table>[,<table>...][:<record id column>]`.
+`--source <CODE>=<view>:<table>[=<column>][,<table>[=<column>]...][:<record id column>]`;
+`<table>=<column>` gives that table its own record id column (a child table's foreign key).
+
+**Tables shared across sources.** A mapping view may read any table it can see, including
+one registered under another source (a contacts view joining the CRM's `ACCOUNTS` for the
+employer). Only the tables listed for a source drive its capture: a changed row of a listed
+table re-resolves the record whose id is in that table's record id column. So:
+
+- A table that holds the source's record id (the main table, or a child table with a
+  foreign key to it) is listed with that column as its `record_id_column`.
+- A table the view only *looks up* (contacts read their employer's `ACCOUNTS` row, which
+  holds no contact id) is listed with a `via`: the column of the changed row, and the
+  source table and column that point at it. A change to the looked-up row re-resolves
+  every record that points at it, before and after the change:
+
+  ```sql
+  CALL SZ_SNOWFLAKE.API.SZ_REGISTER_SOURCE('CRM_CONTACT', 'CRM.PUBLIC.CONTACT_MAPPED', [
+    {'table': 'CRM.PUBLIC.CONTACTS', 'record_id_column': 'CONTACT_ID'},
+    {'table': 'CRM.PUBLIC.ACCOUNTS', 'key_column': 'ACCOUNT_ID',
+     'via': {'table': 'CRM.PUBLIC.CONTACTS', 'key_column': 'ACCOUNT_ID', 'record_id_column': 'CONTACT_ID'}}]);
+  ```
+
+  The `via` table must be one of the source's own tables (listed with its
+  `record_id_column`); the looked-up table needs change tracking like any other. The
+  install script's form is
+  `--source-via CRM_CONTACT=CRM.PUBLIC.ACCOUNTS.ACCOUNT_ID:CRM.PUBLIC.CONTACTS.ACCOUNT_ID.CONTACT_ID`.
+- Each source gets its own stream on a table, so the same table under two sources is fine
+  (`ACCOUNTS` as `CRM_ACCOUNT`'s main table and as a `via` table of `CRM_CONTACT`).
 
 **The CORD data.** The [CORD data](install.md#no-data-of-your-own-load-the-cord-data)
 (Senzing's official [CORD](https://senzing.com/senzing-ready-data-collections-cord/) data, from its Las Vegas collection, reshaped into
@@ -101,6 +128,28 @@ minutes and can read 0 before anything was captured.
 The results are `ENTITY`, `ENTITY_RECORD` (the crosswalk from your records to entities) and
 `RELATIONSHIP` in schema `SZ`.
 
+To show a record's name, address or phone next to its entity, join the crosswalk to your
+own mapping view on `DATA_SOURCE` and `RECORD_ID`: you read only what your role may read.
+For example, every name in entity 1234 from source `CUSTOMERS`:
+
+```sql
+SELECT er.ENTITY_ID, er.RECORD_ID,
+       COALESCE(f.VALUE:NAME_FULL::VARCHAR, f.VALUE:NAME_ORG::VARCHAR,
+                ARRAY_TO_STRING(ARRAY_CONSTRUCT_COMPACT(f.VALUE:NAME_FIRST::VARCHAR,
+                  f.VALUE:NAME_MIDDLE::VARCHAR, f.VALUE:NAME_LAST::VARCHAR), ' ')) AS NAME
+FROM SZ_SNOWFLAKE.SZ.ENTITY_RECORD er
+JOIN <db>.<schema>.CUSTOMERS_MAPPED m ON m.DATA_SOURCE = er.DATA_SOURCE AND m.RECORD_ID = er.RECORD_ID
+JOIN TABLE(FLATTEN(INPUT => m.RECORD_JSON:FEATURES)) f
+WHERE er.ENTITY_ID = 1234
+  AND (f.VALUE:NAME_FULL IS NOT NULL OR f.VALUE:NAME_ORG IS NOT NULL OR f.VALUE:NAME_LAST IS NOT NULL);
+```
+
+`UNION ALL` one such query per source for all of them. Two Snowflake details: use
+`JOIN TABLE(FLATTEN(..))` (a comma `LATERAL FLATTEN` followed by another `JOIN .. ON` that
+names the first table fails with `invalid identifier`), and join name parts with
+`ARRAY_TO_STRING(ARRAY_CONSTRUCT_COMPACT(..))` (`CONCAT_WS` is NULL when any part is, which
+blanks a name without a middle name).
+
 <sub><b>TUNING</b></sub>
 
 ## Settings
@@ -122,9 +171,9 @@ SZ_SNOWFLAKE.SZ.SZ_CONFIG WHERE KIND = 'SETTING'` lists them. Changes to a pipel
 | `BACKLOG_KEYS`, `BACKLOG_WAREHOUSE_SIZE` | 1,000,000, `MEDIUM` | a backlog this large scales `<APP>_WH` up from `XSMALL` |
 | `APPLY_SLOW_SECS` | 60 | an apply slower than this scales `<APP>_WH` up |
 | `CLAIM_MAX_WAIT_SECS` | 60 | see below (1..900) |
-| `POOL_FAMILY`, `POOL_MAX_NODES` | `GEN_ARM_G1_2`, 9 | the compute pool: the cheapest nodes with more than 4 GB (1 vCPU, 6 GiB; `linux/arm64` images), one container each, up to 7 resolvers, the replicator and the setup job; any family works (an x86 one takes the `linux/amd64` images). A new family takes effect at `SZ_START`, which stops the services and recreates the pool |
-| `RESOLVER_INSTANCES`, `RESOLVER_MAX_INSTANCES` | 1, 7 | the resolvers autoscale on CPU between the two. The maximum is a cost cap (CPU autoscaling protects the database); 7 is the most `STANDARD_L`'s connection budget holds (see [Sizing](#sizing)) |
-| `RESOLVER_CPU`, `RESOLVER_THREADS`, `RESOLVER_MEMORY` | 1, empty, empty | per resolver; empty threads are 4 x the CPU (at least 2: about 20% of them, at least 1, re-evaluate pending work, the rest load records; 4 threads are 3 + 1), empty memory is 4 GiB + 0.5 GiB per thread, at most what one `POOL_FAMILY` node can give a container, at least 4 GiB |
+| `POOL_FAMILY`, `POOL_MAX_NODES` | `GEN_ARM_G1_2`, empty | the compute pool: the cheapest nodes with more than 4 GB (1 vCPU, 6 GiB; `linux/arm64` images), one container each; empty `POOL_MAX_NODES` is a node for each resolver `RESOLVER_MAX_INSTANCES` allows, the replicator and the setup job; any family works (an x86 one takes the `linux/amd64` images). A new family takes effect at `SZ_START`, which stops the services and recreates the pool |
+| `RESOLVER_INSTANCES`, `RESOLVER_MAX_INSTANCES` | 1, empty | the resolvers autoscale on CPU between the two. Empty maximum: as many as Postgres can feed, 2 resolver CPUs per core of `PG_COMPUTE_FAMILY` (4 on `STANDARD_L`, 8 on `STANDARD_XL`; 4 when the family is not set or `EXTERNAL`). A number caps it there (see [Sizing](#sizing)) |
+| `RESOLVER_CPU`, `RESOLVER_THREADS`, `RESOLVER_MEMORY` | 1, empty, empty | per resolver; empty threads are 6 x the CPU (at least 2: about 20% of them, at least 1, re-evaluate pending work, the rest load records; 6 threads are 5 + 1), empty memory is 4 GiB + 0.5 GiB per thread, at most what one `POOL_FAMILY` node can give a container, at least 4 GiB |
 | `REPLICATOR_INSTANCES`, `REPLICATOR_CPU`, `REPLICATOR_THREADS`, `REPLICATOR_MEMORY` | 1, 1, empty, empty | the replicator, sized the same way |
 | `PG_COMPUTE_FAMILY`, `PG_MAX_CONNECTIONS`, `PG_MEMORY_GIB` | empty, empty, empty | your Snowflake Postgres instance's `COMPUTE_FAMILY` (at least 8 GB: `STANDARD_L` or larger) and `max_connections` (empty: 500), for the connection budget. For a PostgreSQL you operate: `EXTERNAL`, with its `max_connections` and its memory in GiB (both required, at least 8 GiB; see [install](install.md#bring-your-own-postgresql)) |
 | `START_WAIT_SECS` | 900 | how long `SZ_SETUP` and `SZ_START` wait |
@@ -136,16 +185,30 @@ Idle, the app runs two of the cheapest nodes (`GEN_ARM_G1_2`, 1 vCPU, 6 GiB; one
 0.057 credits/h, about 1.4 credits a day on AWS): one resolver and the replicator, 1 CPU
 and up to 5 GiB each (the node's memory less what Snowflake keeps for itself).
 Under load the resolver service adds instances, up to `RESOLVER_MAX_INSTANCES`, when the
-average resolver uses more than half its CPU for a minute, and removes one when it uses
-less than 30% for three minutes; the pool adds nodes up to `POOL_MAX_NODES` to fit them.
+average resolver uses more than 40% of its CPU for a minute, and removes one when it uses
+less than 25% for three minutes; the pool adds nodes up to `POOL_MAX_NODES` to fit them.
+Scaling on CPU also protects Postgres: a resolver waiting on the database uses little CPU,
+so a saturated database sheds resolvers instead of gaining them.
 One resolver CPU resolves roughly 35-40 records a second.
 
 Every engine thread holds a Postgres session, and each service 5 more of its own (measured:
-a 4-thread resolver holds 9 sessions), so `RESOLVER_MAX_INSTANCES` x (threads + 5) plus the
+a 4-thread resolver holds 9 sessions; a 6-thread one 11), so `RESOLVER_MAX_INSTANCES` x (threads + 5) plus the
 replicator's (threads + 5) and the setup job's 4 must fit Postgres. `STANDARD_L` allows 80:
-7 resolvers x 9 + 9 + 4 = 76, which is why the default maximum is 7 (8 would need 85).
+4 resolvers x 11 + 11 + 4 = 59 at 6 threads. A resolver's threads mostly wait on Postgres
+(at 4 threads one used about half its CPU and 0.4 GiB), so 6 threads per CPU get more from
+each node.
+
+The resolver maximum follows Postgres because Postgres, not the resolvers, sets the pace:
+Senzing's sizing guidance is 2 engine cores per database core. In a 200,000-record first
+load on `STANDARD_L` (2 cores), 4 resolvers ran 172 records a second at a Postgres load of
+7; a 5th added 9% and took the load to 18. For a faster first load, size Postgres up (the
+infrastructure script's `SZ_PG_FAMILY`, then `SZ_CONFIGURE({'PG_COMPUTE_FAMILY': ..})`):
+the maximum and the pool follow it. The install script tells the app the family of the
+Postgres instance it created.
 `RESOLVER_MAX_INSTANCES` is a cost cap; CPU autoscaling keeps the resolvers to what the load
-needs.
+and the database can take. `STANDARD_L` has 2 cores: in a 200,000-record first load its load
+average reached 4 with three resolvers, so past three or four resolvers a larger
+`PG_COMPUTE_FAMILY` buys more throughput than more resolvers.
 `SZ_SET_CONFIG`, `SZ_CONFIGURE` and `SZ_START` refuse (`-20024`, naming the numbers) a
 configuration that needs more sessions than `PG_MAX_CONNECTIONS` less 10, or more than 10 per
 GiB of `PG_COMPUTE_FAMILY`'s memory, or a CPU or memory request larger than one

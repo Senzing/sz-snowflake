@@ -111,6 +111,7 @@ paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes
 | `PARKED` | a resolver parked (`parked_reason`: the license record limit or expiry), or the replicator parked on `shape_mismatch` | license: set `SZ_LICENSE`, `SZ_RELOAD_SECRETS()`; shape: `CALL SZ_RESYNC()` rebuilds the replica and un-parks the replicator |
 | `DEGRADED` | a resolver instance reports `DEGRADED` (engine or repository errors) | `SZ_STATUS()` and the container log |
 | `SHAPE_MISMATCH` | the replica's layout is not this version's | `CALL SZ_RESYNC()` |
+| `LICENSE_EXPIRED` | the running license expired (`LICENSE_EXPIRES`) | put the new license in the license secret (`ALTER SECRET`), then `CALL SZ_RELOAD_SECRETS()` |
 | `SOURCES_NOT_REGISTERED` | a source's code is not yet registered in the engine | wait for the resolver's first batch; then the container log |
 | `CLAIMING_PAUSED` | claiming is paused outside an upgrade or suspend (an abandoned `SZ_PREPARE_UPGRADE`) | `SZ_START` or `SZ_RESUME` clears it |
 | `WATCH_ERRORS` | a `SZ_WATCH` probe failed (`WATCH_ERRORS` lists them); that check kept its previous value | read the error; it is never reported as the condition it could not check |
@@ -121,6 +122,9 @@ paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes
 | `REJECTED_KEYS` | records the engine rejected (`SZ.SZ_RESULT` has the reason per key) | fix the records; `SZ_REQUEUE_REJECTED('<CODE>')` |
 | `DEAD` | entities or redo records that failed `TIMEOUT_MAX_ATTEMPTS` times | the container log; `SZ_RESYNC()` after the cause is fixed |
 | `STARTING_STUCK` | an instance has been `STARTING` longer than `START_WAIT_SECS`: it is still retrying its Postgres connect | Postgres down, full or out of memory; the container log names the error |
+| `LICENSE_EXPIRING` | the license expires within 30 days (`LICENSE_DAYS_LEFT`) | renew it, then update the secret and `SZ_RELOAD_SECRETS()` |
+| `LICENSE_EVALUATION` | no license: the engine runs Senzing's 500-record evaluation limit (`LICENSE_RECORD_LIMIT`) | put your license in the license secret, then `SZ_RELOAD_SECRETS()` |
+| `LICENSE_NEAR_LIMIT` | the crosswalk holds 90% or more of the license's record limit (`LICENSE_RECORDS_USED`) | a license with a larger limit |
 | `CONNECTION_BUDGET` | `CONNECTION_DEMAND`, the sessions the services can hold at `RESOLVER_MAX_INSTANCES`, exceeds `CONNECTION_BUDGET` | lower `RESOLVER_MAX_INSTANCES` or the threads, or size Postgres up and set `PG_COMPUTE_FAMILY` |
 | `APPLY_LAG` | work queued and no apply for an hour | replicator down (above), or the warehouse: `SZ_WATCH` sizes `<APP>_WH` up when an apply passes `APPLY_SLOW_SECS` |
 
