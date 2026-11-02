@@ -187,8 +187,9 @@ and up to 5 GiB each (the node's memory less what Snowflake keeps for itself).
 Under load the resolver service adds instances, up to `RESOLVER_MAX_INSTANCES`, when the
 average resolver uses more than 40% of its CPU for a minute, and removes one when it uses
 less than 25% for three minutes; the pool adds nodes up to `POOL_MAX_NODES` to fit them.
-Scaling on CPU also protects Postgres: a resolver waiting on the database uses little CPU,
-so a saturated database sheds resolvers instead of gaining them.
+CPU scaling does not hold resolvers back when Postgres is the bottleneck: at 6 threads a
+resolver waiting on the database still uses 0.4-0.55 of its CPU, so the autoscaler keeps
+adding them up to the maximum below. That maximum is what sizes the resolvers to Postgres.
 One resolver CPU resolves roughly 35-40 records a second.
 
 Every engine thread holds a Postgres session, and each service 5 more of its own (measured:
@@ -204,9 +205,15 @@ load on `STANDARD_L` (2 cores), 4 resolvers ran 172 records a second at a Postgr
 7; a 5th added 9% and took the load to 18. For a faster first load, size Postgres up (the
 infrastructure script's `SZ_PG_FAMILY`, then `SZ_CONFIGURE({'PG_COMPUTE_FAMILY': ..})`):
 the maximum and the pool follow it. The install script tells the app the family of the
-Postgres instance it created.
-`RESOLVER_MAX_INSTANCES` is a cost cap; CPU autoscaling keeps the resolvers to what the load
-and the database can take. `STANDARD_L` has 2 cores: in a 200,000-record first load its load
+Postgres instance it created. The app cannot see your Postgres instance, so after you
+resize it yourself, `SZ_CONFIGURE({'PG_COMPUTE_FAMILY': '<family>'})` is what moves the
+limits: without it the resolvers stay sized for the old family (too few after sizing up;
+too many for the database after sizing down).
+Empty `RESOLVER_MAX_INSTANCES` derives it from the database's cores; a number you set replaces
+it and is reached under load whatever Postgres is doing. Past 2 resolver CPUs per core the
+gain is small (on `STANDARD_L` a 5th resolver added 9%); where more resolvers start to cost
+throughput or Postgres starts to fail has not been measured, so stay near that ratio and
+size Postgres up for more. `STANDARD_L` has 2 cores: in a 200,000-record first load its load
 average reached 4 with three resolvers, so past three or four resolvers a larger
 `PG_COMPUTE_FAMILY` buys more throughput than more resolvers.
 `SZ_SET_CONFIG`, `SZ_CONFIGURE` and `SZ_START` refuse (`-20024`, naming the numbers) a
@@ -219,12 +226,12 @@ Postgres needs at least 8 GB: `STANDARD_L` (2 cores, 8 GB, 40,000 IOPS, 0.0712 c
 large first load use `STANDARD_XL` or larger, then size it back down.
 Resizing and server settings go in separate statements. The instance restarts for a resize;
 the resolvers and the replicator reconnect on their own and resume within about 60 seconds
-of Postgres returning. With `STANDARD_XL` (160 sessions) up to 16 resolvers fit
-(16 x 9 + 13 = 157):
+of Postgres returning. Then tell the app the new family: the resolver maximum and the pool
+follow it at once, without a restart (`STANDARD_XL`, 4 cores: 8 resolvers, 10 nodes):
 
 ```sql
 ALTER POSTGRES INSTANCE SZ_PG SET COMPUTE_FAMILY = 'STANDARD_XL';
-CALL SZ_SNOWFLAKE.API.SZ_CONFIGURE({'PG_COMPUTE_FAMILY': 'STANDARD_XL', 'RESOLVER_MAX_INSTANCES': '16', 'POOL_MAX_NODES': '18'});
+CALL SZ_SNOWFLAKE.API.SZ_CONFIGURE({'PG_COMPUTE_FAMILY': 'STANDARD_XL'});
 -- an instance created before the infrastructure script turned JIT off:
 ALTER POSTGRES INSTANCE SZ_PG SET POSTGRES_SETTINGS = '{"postgres:jit": "off"}';
 ```

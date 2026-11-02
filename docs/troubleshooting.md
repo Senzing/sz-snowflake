@@ -56,6 +56,8 @@ paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes
 | setup exit 7 `precondition`: `the repository server is PostgreSQL 16..` | the app needs PostgreSQL 17 or later; upgrade your database (Snowflake Postgres: `POSTGRES_VERSION = 17` or later) |
 | the infrastructure script stops with `-20914` | `SZ_PG_MODE = 'EXTERNAL'` needs `SZ_PG_HOST` (a host name) and `SZ_PG_PORT` |
 | `SZ_SET_CONFIG` / `SZ_START` raise `-20024` naming `PG_EXTERNAL` | `PG_COMPUTE_FAMILY` `EXTERNAL` needs `PG_MEMORY_GIB` and `PG_MAX_CONNECTIONS` (your database's size) in the same `SZ_CONFIGURE` |
+| `SZ_CHECK_LICENSE` raises `-20111` | the license is empty (that is the 500-record evaluation limit) or not base64 (the message gives its length; base64 is a multiple of 4 characters): copy it again without extra characters |
+| `SZ_CHECK_LICENSE` returns `"valid": false` | the engine refused the license (`error` says why: signature, expired); nothing was stored. Get the license again from Senzing |
 | `SZ_PURGE_SOURCE` raises `-20209` | the code is malformed, or the source is registered and enabled: `SZ_UNREGISTER_SOURCE('<CODE>')` first (its records would otherwise come back) |
 | `SZ_REGISTER_SOURCE` raises `-20208` | change tracking is off on a source table; nothing was registered. The message carries the statement: as the table owner run `ALTER TABLE <db>.<schema>.<table> SET CHANGE_TRACKING = TRUE;`, then call `SZ_REGISTER_SOURCE` again with the same arguments |
 | `RESOLVE_STATE` reads `SOURCES_FAILED` | a source's capture failed (`SOURCE_ERRORS`: usually change tracking turned off, or a stale stream). Fix what it says, then `SZ_REGISTER_SOURCE` again with the same arguments; `RESOLVE_STATE` never reads `CAUGHT_UP` meanwhile |
