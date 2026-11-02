@@ -12,6 +12,71 @@ that restarts at 1 for each Senzing version.
 
 ### Added
 
+- The resolver service publishes platform metrics (`container.cpu.usage`, memory) to the account's event table, so its autoscaling can be read against its real CPU.
+
+- `SZ_HEALTH` shows the running license: `LICENSE_EXPIRES`, `LICENSE_DAYS_LEFT`,
+  `LICENSE_RECORD_LIMIT`, `LICENSE_RECORDS_USED`, and fails `LICENSE_EXPIRED` and warns
+  `LICENSE_EXPIRING` (30 days), `LICENSE_EVALUATION` (the 500-record evaluation limit) and
+  `LICENSE_NEAR_LIMIT` (90%).
+
+- A change to a table a mapping view only looks up re-resolves the records that read it:
+  a `TABLES` entry with `via` (`{'table': .., 'key_column': .., 'via': {'table': ..,
+'key_column': .., 'record_id_column': ..}}`) joins the changed rows to the source table
+  that points at them; the install script takes it as `--source-via`. `--source` also takes
+  a record id column per table, `<table>=<column>` (a child table's foreign key).
+
+- The install script checks every prerequisite before any step runs (also with `--dry-run`)
+  and lists every problem at once, changing nothing: the tools on PATH, the Snowflake CLI's
+  connector version, the Docker daemon, `--pg-host` resolving, the bundle and `SHA256SUMS`,
+  the connection and role, the infra secrets and external access integration, and each
+  `--source` view (`DATA_SOURCE`, `RECORD_ID`, `RECORD_JSON`) and table (visible,
+  `CHANGE_TRACKING` on, the record id column).
+
+### Changed
+
+- Default engine threads are 6 per CPU (was 4): a 4-thread resolver used about half its CPU,
+  its threads waiting on Postgres.
+- `RESOLVER_MAX_INSTANCES` and `POOL_MAX_NODES` default to empty, derived from Postgres:
+  2 resolver CPUs per core of `PG_COMPUTE_FAMILY` (4 on `STANDARD_L`, 8 on `STANDARD_XL`;
+  4 when unknown), and a pool node for each plus the replicator and setup job. On
+  `STANDARD_L` a 5th resolver took Postgres from load 7 to 18 for 9% more throughput.
+  An upgrade resets a value still at the old default (7, 9) to empty. The install script
+  sets `PG_COMPUTE_FAMILY` from the Postgres instance.
+
+- Resolver autoscaling adds an instance above 40% CPU (was 50%) and removes one below 25%
+  (was 30%). A resolver not waiting on Postgres averages about 48%, so 50% held the second
+  resolver back 18 minutes in a 200,000-record first load; resolvers waiting on a saturated
+  Postgres stay below 40%, so the database is still not overloaded.
+
+- **Breaking:** a mapping view's JSON column is now `RECORD_JSON` (was `JSON_DOC`), so a
+  view is `DATA_SOURCE`, `RECORD_ID`, `RECORD_JSON` — the contract the Senzing MCP server's
+  Snowflake guidance already uses. No alias: before upgrading, rename the column in each
+  registered mapping view (`... AS RECORD_JSON`); a view still returning `JSON_DOC` is
+  refused by `SZ_REGISTER_SOURCE` and cannot be resolved.
+
+### Fixed
+
+- `SZ_REGISTER_SOURCE` upper-cases a plain `record_id_column` (and a `via` entry's columns)
+  like Snowflake does for unquoted names; a lower-case name used to register but never
+  match a changed row.
+
+- The install script's wait for `CAUGHT_UP` no longer stops silently: a failed
+  `SZ_HEALTH` poll is reported and retried, and the wait always ends with one
+  `resolve wait:` line naming the outcome (`CAUGHT_UP`, timed out, failed source,
+  error), the elapsed time, records and entities resolved, `SZ_HEALTH.OVERALL` and the
+  exit code. A timeout says resolution continues in the background.
+
+## [4.4.3-2] - 2026-10-31
+
+### Added
+
+- Auto-pause, on by default: an install idle for 30 minutes suspends its compute pool and
+  Postgres and wakes on new work; `SZ_PAUSE` / `SZ_UNPAUSE` in `SZ_INFRA_DB.SZ_INFRA`.
+  `SZ_PG_SHARED` marks a Postgres as shared (never suspended); `SZ_PG_MODE EXTERNAL` uses
+  your own PostgreSQL 17.
+- Two installs in one account (`--app`, `--infra-prefix`); `SZ_UNINSTALL`,
+  `SZ_PURGE_SOURCE`, `RESOLVE_STATE`, and FAIL/WARN codes in `SZ_HEALTH`.
+- Per-architecture bundles (`linux-amd64`, `linux-arm64`, about 0.31 GB each).
 - `sz-snowflake-cord-data.tar.gz`, the CORD data for the Senzing Snowflake preview: Senzing's
   official [CORD](https://senzing.com/senzing-ready-data-collections-cord/) data from its Las Vegas collection, reshaped into normalized source
   tables for six source systems (about 200,000 records), with `load.sql` to load it into

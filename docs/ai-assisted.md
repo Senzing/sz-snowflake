@@ -32,7 +32,7 @@ Have ready:
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | The [prerequisites](../README.md#prerequisites) | a role such as `ACCOUNTADMIN`, the Snowflake CLI, Docker, `cosign`                                                          |
 | A release                                       | its tag, e.g. `4.4.3-1`, from this repository's [releases](https://github.com/Senzing/sz-snowflake/releases)                |
-| Your sources                                    | per data source: a code (`CUSTOMERS`), a mapping view producing Senzing JSON, and its base table(s) with a record id column |
+| Your sources                                    | per data source: a code (`CUSTOMERS`), a mapping view (`DATA_SOURCE`, `RECORD_ID`, `RECORD_JSON` = the Senzing JSON), and its base table(s) with a record id column |
 | No data of your own?                            | the assistant can load and map the [CORD data](#no-data-of-your-own) instead                                                |
 | A license (optional)                            | base64; without one the engine stops at 500 records                                                                         |
 
@@ -85,7 +85,11 @@ Fill in the placeholders and paste:
 >    and one `--source` per data source (every base table needs change tracking: if one
 >    lacks it, show me `ALTER TABLE <db.schema.table> SET CHANGE_TRACKING = TRUE;` to run
 >    as the table owner, then re-run this step):
->    `--source <CODE>=<db.schema.mapping_view>:<db.schema.table>[:<record id column>]`.
+>    `--source <CODE>=<db.schema.mapping_view>:<db.schema.table>[=<column>][,...][:<record id column>]`,
+>    listing every table the view reads that holds the record id (a child table with
+>    `=<its foreign key>`), plus one `--source-via` for each table the view only looks up,
+>    so a change to it re-resolves the records that read it:
+>    `--source-via <CODE>=<db.schema.table>.<key column>:<db.schema.source_table>.<column pointing at it>.<record id column>`.
 > 6. While setup runs (2 to 5 minutes, one blocking call), check
 >    `SELECT SETUP_PHASE, SETUP_RUNNING_SECS FROM SZ_SNOWFLAKE.API.SZ_HEALTH` every 15
 >    seconds and tell me the phase in one line.
@@ -116,8 +120,9 @@ values to the assistant:
 > my connection after I confirm. Then map each source system in it with the Senzing MCP
 > mapping tools (`mapping_workflow`; never hand-write the mapping): create one mapping
 > view per source in its schema, show me each view, and pass one `--source` per source
-> system to the install script, listing every table the view reads with its record id
-> column.
+> system to the install script, listing every table the view reads: those holding the
+> record id with `--source`, those it only looks up (another system's table, such as the
+> contacts view reading `ACCOUNTS`) with `--source-via`.
 
 <sub><b>REPORT</b></sub>
 
@@ -135,10 +140,12 @@ When the state reads `CAUGHT_UP`, paste:
 >
 > Results, schema `SZ_SNOWFLAKE.SZ`: `ENTITY_RECORD` (DATA_SOURCE, RECORD_ID, ENTITY_ID,
 > MATCH_KEY, empty for an entity's first record), `ENTITY` (ENTITY_ID, RECORD_COUNT),
-> `RELATIONSHIP` (ENTITY_ID_LO, ENTITY_ID_HI, MATCH_LEVEL_CODE, MATCH_KEY). Join each
-> record to its source row: for data source `<CODE>`, table `<db.schema.table>` on
-> `<record id column>` = RECORD_ID. Show readable fields such as name, date of birth,
-> address, phone and email.
+> `RELATIONSHIP` (ENTITY_ID_LO, ENTITY_ID_HI, MATCH_LEVEL_CODE, MATCH_KEY). For readable
+> fields join each record to its source's mapping view on DATA_SOURCE and RECORD_ID and
+> read RECORD_JSON:FEATURES with `JOIN TABLE(FLATTEN(..))`; join name parts with
+> `ARRAY_TO_STRING(ARRAY_CONSTRUCT_COMPACT(..))`, not `CONCAT_WS` (see the Use guide).
+> Show readable fields such as name, date of birth, address, phone and email; bind search
+> text as a parameter.
 >
 > Sections:
 >

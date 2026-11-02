@@ -116,7 +116,9 @@ does not let you choose the availability zone, so same-zone placement cannot be 
 ## 2. Install from the bundle
 
 `sz-snowflake-install-<release>.sh` does everything from the downloaded files. Read it first
-(`--dry-run` prints every step and runs nothing).
+(`--dry-run` prints every step and changes nothing). Before any step it checks every
+prerequisite (tools, connection and role, the infra objects, each `--source` view and table,
+including `CHANGE_TRACKING`) and lists every problem at once; a dry run runs the same checks.
 
 ```bash
 ./sz-snowflake-install-<release>.sh <release> --pg-host <PG_HOST> --operator-role <role> [--role <role>] \
