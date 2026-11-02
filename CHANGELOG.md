@@ -10,6 +10,37 @@ that restarts at 1 for each Senzing version.
 
 ## [Unreleased]
 
+## [4.4.3-4] - 2026-11-02
+
+### Added
+
+- Install script `--license-file <path>`: the license is checked before any step runs (not
+  empty, base64, a multiple of 4 characters) and stored into the license secret before
+  setup, never printed.
+
+- `API.SZ_CHECK_LICENSE(<base64>)` checks a license before you store it: an empty or malformed
+  value is refused at once (`-20111`), then a short setup job starts the engine with it and
+  reports its expiry and record limit, or why the engine refuses it. Nothing is stored or
+  restarted; the app never returns or logs the license (it is in the check job's spec while
+  the job runs, and the CALL is in your query history).
+
+### Fixed
+
+- Docs: CPU autoscaling does not hold resolvers back when Postgres is the bottleneck, as the
+  4.4.3-3 notes and the Use guide said: at 6 threads a resolver waiting on Postgres stays
+  above the 40% trigger. The resolver maximum (2 per Postgres core when empty) is what sizes
+  them to Postgres; past that ratio the gain is small (+9% for a 5th on `STANDARD_L`), and a
+  `RESOLVER_MAX_INSTANCES` set by hand is reached under any load.
+
+- A Postgres resize reaches the running resolvers at once: `SZ_CONFIGURE` and `SZ_SET_CONFIG`
+  apply the resolver's instance limits and the pool's `MAX_NODES` to running services when
+  `PG_COMPUTE_FAMILY`, `RESOLVER_MAX_INSTANCES`, `RESOLVER_INSTANCES`,
+  `REPLICATOR_INSTANCES` or `POOL_MAX_NODES` changes (they used to wait for `SZ_START`). The
+  Use guide's resize example now sets only `PG_COMPUTE_FAMILY`; its old 16 resolvers would
+  exceed `STANDARD_XL`'s sessions at 6 threads.
+
+## [4.4.3-3] - 2026-11-02
+
 ### Added
 
 - The resolver service publishes platform metrics (`container.cpu.usage`, memory) to the account's event table, so its autoscaling can be read against its real CPU.

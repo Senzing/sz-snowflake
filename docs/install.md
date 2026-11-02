@@ -220,11 +220,33 @@ EULA_ACCEPTED_BY FROM SZ_SNOWFLAKE.API.SZ_HEALTH` shows the acceptance.
 ## 4. Set the license secret
 
 Run interactively, never committed:
-`ALTER SECRET SZ_LICENSE SET SECRET_STRING = '<base64>'`. It stays yours: the app has
+`ALTER SECRET SZ_LICENSE SET SECRET_STRING = '<base64>'`, or give the install script
+`--license-file <path>`: it checks the file before any step runs (not empty, base64, a
+multiple of 4 characters) and stores it without printing it (the `ALTER SECRET` it sends is in
+your query history, as when you run it yourself). It stays yours: the app has
 `READ`, logs only its expiry date and record limit, and never sends it anywhere. If the
 services are already running, `CALL SZ_SNOWFLAKE.API.SZ_RELOAD_SECRETS()` restarts them so
 they read it (secrets are read once at start). The same applies to a rotated Postgres
 password or a new CA (the infra script's `ROTATE` section).
+
+To renew on a running install, check the new license first, so a bad copy never reaches
+the services:
+
+```sql
+CALL SZ_SNOWFLAKE.API.SZ_CHECK_LICENSE('<base64>');
+-- {"valid": true, "expire_date": "...", "record_limit": ...}: then store it and reload
+ALTER SECRET SZ_LICENSE SET SECRET_STRING = '<base64>';
+CALL SZ_SNOWFLAKE.API.SZ_RELOAD_SECRETS();
+```
+
+`SZ_CHECK_LICENSE` refuses an empty or malformed value at once (`-20111`: one character
+pasted too many is a length that is not a multiple of 4), then starts the engine with the
+license in a short job and reports its expiry and record limit, or `"valid": false` with
+the engine's reason. It stores nothing and restarts nothing. The app never returns or logs
+the license; it is in the check job's spec only while that job runs, and, as with
+`ALTER SECRET`, the statement you run is in your query history.
+`SZ_HEALTH` shows the running license (`LICENSE_EXPIRES`, `LICENSE_DAYS_LEFT`,
+`LICENSE_RECORD_LIMIT`, `LICENSE_RECORDS_USED`) and warns 30 days before it expires.
 
 <sub><b>FIRST RUN</b></sub>
 
