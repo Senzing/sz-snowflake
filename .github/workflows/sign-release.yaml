@@ -17,7 +17,7 @@ name: Sign release
 # handed a GitHub App private key to `pull_request` runs. A non-fork pull
 # request receives secrets AND runs the workflow definition from the pull
 # request head, so anyone with write on a public repository in this
-# organization could have added a step that exfiltrated the key. Nothing added
+# organization could have added a step that stole the key. Nothing added
 # to THIS file can recreate that exposure, because there is no credential here
 # that reaches anything else -- keep it that way.
 #

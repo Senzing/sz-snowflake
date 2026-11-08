@@ -239,6 +239,11 @@ ALTER SECRET SZ_LICENSE SET SECRET_STRING = '<base64>';
 CALL SZ_SNOWFLAKE.API.SZ_RELOAD_SECRETS();
 ```
 
+The reload is a short pause, about 2.5 minutes in testing: both services suspend and
+resume. Your queries on `ENTITY`, `ENTITY_RECORD` and `RELATIONSHIP` keep working, and
+changes made meanwhile wait in the queue and resolve when the services are back. Only the
+service functions (`SZ_STATUS`, `SZ_STATS`, `SZ_PERF`) are unavailable until then.
+
 `SZ_CHECK_LICENSE` refuses an empty or malformed value at once (`-20111`: one character
 pasted too many is a length that is not a multiple of 4), then starts the engine with the
 license in a short job and reports its expiry and record limit, or `"valid": false` with

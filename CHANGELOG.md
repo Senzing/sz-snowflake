@@ -10,6 +10,25 @@ that restarts at 1 for each Senzing version.
 
 ## [Unreleased]
 
+### Changed
+
+- Install script: `--skip-verify` is the only flag that skips verification; its older
+  alias is removed. It works as before, and only for a bundle you built yourself.
+
+### Fixed
+
+- `SZ_SET_CONFIG` of an instance limit while the services are suspended says
+  `applies_at: 'now (suspended services keep it at SZ_RESUME)'`, not 'now (running services)'.
+
+- The comments in the release files (app, infra SQL, install script) and the messages of
+  the services read in plain terms; nothing they do changes.
+
+### Documentation
+
+- Install: renewing a license with `SZ_RELOAD_SECRETS` pauses resolution for a few minutes
+  (about 2.5 in testing); queries on the crosswalk tables keep working and changes wait in
+  the queue.
+
 ## [4.4.3-4] - 2026-11-02
 
 ### Added
