@@ -4,11 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The changelog format is based on [Keep a Changelog] and [CommonMark].
 
-Versions here are the releases of Senzing on Snowflake, `<senzing_version>-<build>`
-(for example `4.4.3-1`): the Senzing version the release carries and a build counter
-that restarts at 1 for each Senzing version.
+Versions here are the releases of sz-snowflake, `<senzing_version>-<build>`
+(for example `4.4.3-1`): the SENZING® SDK version the release carries and a build counter
+that restarts at 1 for each Senzing SDK version.
 
 ## [Unreleased]
+
+## [4.4.3-6] - 2026-11-09
+
+### Changed
+
+- A release carries one signature, `SHA256SUMS.sigstore.json`: `SHA256SUMS` is signed and
+  holds the SHA-256 of every file, so the per-file `.sigstore.json` files are gone. Verify the
+  signature, then `sha256sum -c SHA256SUMS`; the install script does both and refuses a file
+  `SHA256SUMS` does not list.
+- The bundle no longer copies the infrastructure and install scripts: they are release files
+  of their own. A release is 7 files, and an install needs 5 of them.
+
+### Documentation
+
+- The public docs follow the Senzing brand: a logo header, a "How it works" diagram, the
+  trademark and editorial rules, and no all-caps labels above headings.
+- Use: Postgres storage is billed on what is allocated; Snowflake grows it near full (the
+  instance is read-only meanwhile) and never shrinks it.
+
+## [4.4.3-5] - 2026-11-08
 
 ### Changed
 

@@ -9,9 +9,10 @@ name: Sign release
 # nothing. The release -- the bundle with the Native App files and the container
 # images, the infrastructure script, the install script and SHA256SUMS -- is
 # built elsewhere and PUSHED here, as a release created by a single publishing account. This
-# workflow reads that release with its own GITHUB_TOKEN, checks it, signs each
-# file keyless (cosign sign-blob, the OIDC token of this run) and attaches
-# <file>.sigstore.json for each file, SHA256SUMS included.
+# workflow reads that release with its own GITHUB_TOKEN, checks it, signs
+# SHA256SUMS keyless (cosign sign-blob, the OIDC token of this run) and attaches
+# SHA256SUMS.sigstore.json. The signature proves the list; each file's SHA-256 in
+# it proves the file, so one signature covers the whole release.
 #
 # That is the whole reason the direction was reversed. The previous design
 # handed a GitHub App private key to `pull_request` runs. A non-fork pull
@@ -166,26 +167,25 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Every file and SHA256SUMS itself, keyless, as this workflow at this tag.
-      # Each signature is verified straight away against the exact identity
-      # customers use; SHA256SUMS goes last, so its signature marks a finished run.
-      - name: Sign every file (cosign sign-blob)
+      # SHA256SUMS, keyless, as this workflow at this tag, after every file in it
+      # matched its checksum. The signature is verified straight away against the
+      # exact identity customers use.
+      - name: Sign SHA256SUMS (cosign sign-blob)
         env:
           WORKFLOW_REF: ${{ github.workflow_ref }}
         working-directory: assets
         run: |
           set -euo pipefail
           mkdir -p ../bundles
-          for asset in $(awk '{ print $2 }' SHA256SUMS) SHA256SUMS; do
-            cosign sign-blob --yes --bundle "../bundles/${asset}.sigstore.json" "$asset"
-            cosign verify-blob --bundle "../bundles/${asset}.sigstore.json" \
-              --certificate-oidc-issuer "$OIDC_ISSUER" \
-              --certificate-identity "https://github.com/${WORKFLOW_REF}" \
-              "$asset" > /dev/null
-          done
+          sha256sum -c SHA256SUMS
+          cosign sign-blob --yes --bundle ../bundles/SHA256SUMS.sigstore.json SHA256SUMS
+          cosign verify-blob --bundle ../bundles/SHA256SUMS.sigstore.json \
+            --certificate-oidc-issuer "$OIDC_ISSUER" \
+            --certificate-identity "https://github.com/${WORKFLOW_REF}" \
+            SHA256SUMS > /dev/null
           ls -l ../bundles
 
-      - name: Attach the signatures to the release
+      - name: Attach the signature to the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
@@ -196,20 +196,15 @@ jobs:
           {
             echo
             echo "## Verify"
-            echo "Every file is signed as \`${identity}\`; see README.md."
+            echo "\`SHA256SUMS\` is signed as \`${identity}\`, and it holds the SHA-256 of every file; see README.md."
             echo '```bash'
-            echo "sha256sum -c SHA256SUMS"
-            echo "cosign verify-blob --bundle <file>.sigstore.json --certificate-identity '${identity}' \\"
-            echo "  --certificate-oidc-issuer ${OIDC_ISSUER} <file>"
+            echo "cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity '${identity}' \\"
+            echo "  --certificate-oidc-issuer ${OIDC_ISSUER} SHA256SUMS"
+            echo "sha256sum --ignore-missing -c SHA256SUMS"
             echo '```'
           } > notes.md
           body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
           printf '%s\n%s\n' "$body" "$(cat notes.md)" > full.md
-          # SHA256SUMS.sigstore.json last: it marks a finished run.
-          for f in bundles/*.sigstore.json; do
-            [ "$f" = bundles/SHA256SUMS.sigstore.json ] && continue
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$f"
-          done
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber bundles/SHA256SUMS.sigstore.json
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file full.md
           cat notes.md >> "$GITHUB_STEP_SUMMARY"

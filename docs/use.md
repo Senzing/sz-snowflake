@@ -1,9 +1,3 @@
-<p>
-  <img src="../assets/senzing-logo.jpg" alt="Senzing" width="48" align="left" hspace="8">
-  <samp><b>SENZING</b></samp>
-</p>
-<br clear="left">
-
 [sz-snowflake](../README.md) / Use
 
 # Use
@@ -11,13 +5,11 @@
 Day-to-day operation of an installed app. Procedures are in `SZ_SNOWFLAKE.API`; the
 roles are `APP_ADMIN` (operates) and `APP_USER` (reads health and the results).
 
-<sub><b>DATA IN</b></sub>
-
 ## Register a source
 
 You need a mapping view with `DATA_SOURCE`, `RECORD_ID` (VARCHAR) and `RECORD_JSON`
-(OBJECT/VARIANT) in the Senzing entity specification. An AI assistant can draft it with the
-Senzing MCP `mapping_workflow`. Bind the view and its base tables as references (only you
+(OBJECT/VARIANT) in the SENZING® entity specification. An AI assistant can draft it with
+`mapping_workflow` from the Senzing Model Context Protocol (MCP) server. Bind the view and its base tables as references (only you
 can bind a reference), then register the source by name:
 
 ```sql
@@ -66,10 +58,10 @@ table re-resolves the record whose id is in that table's record id column. So:
 - Each source gets its own stream on a table, so the same table under two sources is fine
   (`ACCOUNTS` as `CRM_ACCOUNT`'s main table and as a `via` table of `CRM_CONTACT`).
 
-**The CORD data.** The [CORD data](install.md#no-data-of-your-own-load-the-cord-data)
-(Senzing's official [CORD](https://senzing.com/senzing-ready-data-collections-cord/) data, from its Las Vegas collection, reshaped into
+**The CORD data.** The [Collections Of Relatable Data (CORD)](install.md#no-data-of-your-own-load-the-cord-data)
+(the official Senzing [CORD](https://senzing.com/senzing-ready-data-collections-cord/) data, from its Las Vegas collection, reshaped into
 normalized source tables) must be mapped first: no table is in the Senzing entity
-specification. Register one source per source system (`CRM`, `PROVIDER_REGISTRY`, and so on;
+specification. Register one source per source system (`CRM`, `PROVIDER_REGISTRY` and so on;
 a system that holds two kinds of record, such as the CRM's accounts and contacts, can be
 two). A source's mapping view joins its main table to the child tables (addresses, phones,
 identifiers); list every table the view reads as a base table, each with the column that
@@ -98,8 +90,6 @@ own registered sources are not, so re-running `SZ_SETUP` on your own install sta
 Remove one source's with `SZ_PURGE_SOURCE` (below). To
 start clean, drop that database first with `CALL SZ_SNOWFLAKE.API.SZ_UNINSTALL('<PG_DATABASE>')`
 (see [Teardown](#teardown)) or configure a new `PG_DATABASE` before `SZ_SETUP`.
-
-<sub><b>PROGRESS</b></sub>
 
 ## Watch it resolve
 
@@ -150,8 +140,6 @@ names the first table fails with `invalid identifier`), and join name parts with
 `ARRAY_TO_STRING(ARRAY_CONSTRUCT_COMPACT(..))` (`CONCAT_WS` is NULL when any part is, which
 blanks a name without a middle name).
 
-<sub><b>TUNING</b></sub>
-
 ## Settings
 
 `CALL SZ_SNOWFLAKE.API.SZ_SET_CONFIG('<NAME>', '<value>')`, or several at once with
@@ -200,7 +188,7 @@ replicator's (threads + 5) and the setup job's 4 must fit Postgres. `STANDARD_L`
 each node.
 
 The resolver maximum follows Postgres because Postgres, not the resolvers, sets the pace:
-Senzing's sizing guidance is 2 engine cores per database core. In a 200,000-record first
+the Senzing sizing guidance is 2 engine cores per database core. In a 200,000-record first
 load on `STANDARD_L` (2 cores), 4 resolvers ran 172 records a second at a Postgres load of
 7; a 5th added 9% and took the load to 18. For a faster first load, size Postgres up (the
 infrastructure script's `SZ_PG_FAMILY`, then `SZ_CONFIGURE({'PG_COMPUTE_FAMILY': ..})`):
@@ -217,13 +205,22 @@ size Postgres up for more. `STANDARD_L` has 2 cores: in a 200,000-record first l
 average reached 4 with three resolvers, so past three or four resolvers a larger
 `PG_COMPUTE_FAMILY` buys more throughput than more resolvers.
 `SZ_SET_CONFIG`, `SZ_CONFIGURE` and `SZ_START` refuse (`-20024`, naming the numbers) a
-configuration that needs more sessions than `PG_MAX_CONNECTIONS` less 10, or more than 10 per
+configuration that needs more sessions than `PG_MAX_CONNECTIONS` less 10 or more than 10 per
 GiB of `PG_COMPUTE_FAMILY`'s memory, or a CPU or memory request larger than one
 `POOL_FAMILY` node. Set `PG_COMPUTE_FAMILY` to your instance's family so the budget is real.
 
 Postgres needs at least 8 GB: `STANDARD_L` (2 cores, 8 GB, 40,000 IOPS, 0.0712 credits/h on AWS) or larger; burstable families are not supported (CPU throttling, 100 GB storage cap); a smaller `PG_COMPUTE_FAMILY` is refused and
 `SZ_HEALTH` fails `PG_TOO_SMALL` (48 engine sessions ran a `BURST_S` out of memory). For a
 large first load use `STANDARD_XL` or larger, then size it back down.
+
+Postgres storage is billed on what is allocated, not what is used: the infrastructure
+script allocates 250 GB (`SZ_PG_STORAGE_GB`). Snowflake grows it on its own when the disk
+is nearly full (85% used with less than 50 GB free, or 90% used), by 25% for a 100 GB to
+999 GB disk and 15% above that, and puts the instance in read-only mode while it does.
+It never shrinks it. To grow it at a time you choose instead, watch the disk and resize
+first: `ALTER POSTGRES INSTANCE SZ_PG SET STORAGE_SIZE_GB = <gb>`
+([Snowflake Postgres maintenance](https://docs.snowflake.com/en/user-guide/snowflake-postgres/postgres-maintenance)).
+
 Resizing and server settings go in separate statements. The instance restarts for a resize;
 the resolvers and the replicator reconnect on their own and resume within about 60 seconds
 of Postgres returning. Then tell the app the new family: the resolver maximum and the pool
@@ -275,7 +272,7 @@ few hundred entities that each take tens of seconds means the claims are too sma
 Idle cost is the compute pool's nodes and Postgres. Pausing suspends both: the services and
 pool (`SZ_SUSPEND`), then the Postgres instance. What remains is Postgres storage and small
 serverless tasks (billed per second at 0.9x): the hourly prune (about 0.05 credits a day
-measured), the auto-pause check, and capture, which runs only when a source changes. The
+measured), the auto-pause check and capture, which runs only when a source changes. The
 app's health task does no work while paused (running, it measured about 0.4 credits a day). Pause and unpause are procedures
 the infrastructure script creates in your `SZ_INFRA_DB.SZ_INFRA` (`<SZ_PREFIX>_INFRA_DB`; the
 examples use the default prefix `SZ`) (only you can suspend your
@@ -302,7 +299,7 @@ change after a pause waits up to the check interval plus 3-5 minutes for Postgre
 pool to resume. It never
 re-pauses within the idle window after an unpause, never pauses while setup runs or before
 the services are `READY`, counts the idle time from the latest capture, apply, setup run,
-`SZ_START`/`SZ_RESUME` or source registration (`SZ_HEALTH.LAST_ACTIVITY_AT`), and leaves alone an app you stopped or
+`SZ_START`/`SZ_RESUME` or source registration (`SZ_HEALTH.LAST_ACTIVITY_AT`) and leaves alone an app you stopped or
 suspended by hand. To turn it off, or change the minutes, set the variables at the top of
 the infrastructure script and run its `INSTALL` section again:
 
@@ -318,11 +315,9 @@ by default your role). Capture keeps reading your source tables' streams while p
 stream does not go stale; if one does after a very long pause, `SZ_UNPAUSE` repairs it (the
 app's `SZ_RESUME` re-registers stale sources).
 
-<sub><b>NEW RELEASES</b></sub>
-
 ## Upgrade
 
-A later build of the same Senzing version (`4.4.3-1` to `4.4.3-2`): download and verify the
+A later build of the same Senzing SDK version (`4.4.3-1` to `4.4.3-2`): download and verify the
 new release, then run its install script with `--upgrade` (it pushes the new images, `PUT`s
 the new app files and registers the patch). By hand, after the files are in the stage:
 
@@ -336,7 +331,7 @@ ALTER APPLICATION SZ_SNOWFLAKE UPGRADE;
 CALL SZ_SNOWFLAKE.API.SZ_UPGRADE();
 ```
 
-A new Senzing
+A new Senzing SDK
 version (`4.4.4-1`) is `REGISTER VERSION V4_4_4 .. LABEL = '4.4.4-1'`, added to the
 `DEFAULT` channel, then the same directive, upgrade and `SZ_UPGRADE`; deregister `V4_4_3`
 once no app reports it (a channel holds two versions). Verify: `SZ_HEALTH.UPGRADE_PENDING`
@@ -344,12 +339,11 @@ clears and `OVERALL` is `OK`; no version stays `FINALIZING` in `SHOW VERSIONS IN
 PACKAGE SZ_SNOWFLAKE_PKG`. `SZ_UPGRADE` stops at the first failing step and resumes there
 when you call it again.
 
-A release that carries a new Senzing EULA version needs a new acceptance: `SZ_UPGRADE`
+A release that carries a new version of the Senzing End User License Agreement (EULA) needs
+a new acceptance: `SZ_UPGRADE`
 returns `FAILED` with `-20109` until `CALL SZ_SNOWFLAKE.API.SZ_ACCEPT_EULA('I_ACCEPT_THE_SENZING_EULA')`
 runs, then resumes when called again. The install script checks this after `ALTER APPLICATION
 .. UPGRADE`: it stops with the `CALL` to run, or runs it with `--accept-eula`.
-
-<sub><b>REMOVAL</b></sub>
 
 ## Teardown
 

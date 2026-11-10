@@ -23,6 +23,7 @@
     "keepachangelog",
     "kernelsam",
     "llvmjit",
+    "Neue",
     "nonroot",
     "pipefail",
     "reusables",

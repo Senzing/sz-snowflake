@@ -10,8 +10,9 @@
 # README.md, load.sql and <source>/<table>.csv files, nothing else) and SHA256SUMS, which must
 # verify and list exactly the others. Each bundle is opened: its top
 # directory, app/ (the app files), images/<arch>/sz-snowflake-images.tar (the role images of
-# that architecture, one docker archive) for every architecture it holds, and the infra SQL and install script, identical to the loose
-# files. --bundle defaults to what the directory holds; --platforms to both architectures.
+# that architecture, one docker archive) for every architecture it holds, and nothing else: the
+# infra SQL and install script are release files of their own, never copied into a bundle.
+# --bundle defaults to what the directory holds; --platforms to both architectures.
 set -euo pipefail
 
 dir=""; release=""; mode=""; platforms="linux/amd64,linux/arm64"
@@ -94,8 +95,7 @@ for f in "${deliverables[@]}"; do
   if [ "$mode" = combined ]; then bundle_archs=("${archs[@]}")
   else bundle_archs=("${name##*-linux-}"); fi
   need=("$name/app/manifest.yml" "$name/app/setup_script.sql" "$name/app/README.md" "$name/app/SHA256SUMS"
-        "$name/app/services/setup.yaml" "$name/app/services/resolver.yaml" "$name/app/services/replicator.yaml"
-        "$name/sz-snowflake-infra-$release.sql" "$name/sz-snowflake-install-$release.sh")
+        "$name/app/services/setup.yaml" "$name/app/services/resolver.yaml" "$name/app/services/replicator.yaml")
   for a in "${bundle_archs[@]}"; do
     need+=("$name/images/$a/sz-snowflake-images.tar")
   done

@@ -1,29 +1,21 @@
-<p>
-  <img src="../assets/senzing-logo.jpg" alt="Senzing" width="48" align="left" hspace="8">
-  <samp><b>SENZING</b></samp>
-</p>
-<br clear="left">
-
 [sz-snowflake](../README.md) / Install and report with an AI assistant
 
 # Install and report with an AI assistant
 
 An AI coding assistant with a shell and a Snowflake connection (Snowflake Cortex Code,
-Claude Code, or similar) can run the whole [path](../README.md#the-path) for you: verify
-the release, install the app, register your sources, watch them resolve, and build a
+Claude Code or similar) can run the whole [path](../README.md#the-path) for you: verify
+the release, install the app, register your sources, watch them resolve and build a
 report on the results. You watch and answer its questions; it never accepts the Senzing
-EULA on your behalf.
+End User License Agreement (EULA) on your behalf.
 
 The assistant uses the Snowflake connection it already has, so you do not log in to
 Snowflake separately.
 
-<sub><b>MCP AND INPUTS</b></sub>
-
 ## Before you start
 
-**Connect the Senzing MCP server.** Add `https://mcp.senzing.com/mcp` (HTTP, no
-authentication) to your assistant's MCP servers. It answers Senzing questions (match keys,
-match levels, entity specification attributes, error codes) from Senzing's documentation,
+**Connect the SENZING® Model Context Protocol (MCP) server.** Add `https://mcp.senzing.com/mcp`
+(HTTP, no authentication) to your assistant's MCP servers. It answers Senzing questions (match
+keys, match levels, entity specification attributes, error codes) from the Senzing documentation,
 so the assistant does not guess. Do not send it personal data or credentials.
 
 Have ready:
@@ -32,11 +24,9 @@ Have ready:
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | The [prerequisites](../README.md#prerequisites) | a role such as `ACCOUNTADMIN`, the Snowflake CLI, Docker, `cosign`                                                          |
 | A release                                       | its tag, e.g. `4.4.3-1`, from this repository's [releases](https://github.com/Senzing/sz-snowflake/releases)                |
-| Your sources                                    | per data source: a code (`CUSTOMERS`), a mapping view (`DATA_SOURCE`, `RECORD_ID`, `RECORD_JSON` = the Senzing JSON), and its base table(s) with a record id column |
-| No data of your own?                            | the assistant can load and map the [CORD data](#no-data-of-your-own) instead                                                |
+| Your sources                                    | per data source: a code (`CUSTOMERS`), a mapping view (`DATA_SOURCE`, `RECORD_ID`, `RECORD_JSON` = the Senzing JSON) and its base table(s) with a record id column |
+| No data of your own?                            | the assistant can load and map the [Collections Of Relatable Data (CORD)](#no-data-of-your-own) instead                                                |
 | A license (optional)                            | base64; without one the engine stops at 500 records                                                                         |
-
-<sub><b>INSTALL</b></sub>
 
 ## Prompt 1: install and resolve
 
@@ -49,7 +39,7 @@ Fill in the placeholders and paste:
 > 1. Download from https://github.com/Senzing/sz-snowflake/releases into a new empty
 >    directory only the bundle for the pool's architecture (`linux-arm64` for the default
 >    pool; `linux-amd64` only if I choose an x86 `POOL_FAMILY`), the infrastructure and
->    install scripts, `SHA256SUMS` and their `.sigstore.json` files, and verify them exactly
+>    install scripts, `SHA256SUMS` and `SHA256SUMS.sigstore.json`, and verify them exactly
 >    as the README's "Verify" section says. Stop if any check fails.
 >    **Before you deploy: ask, don't assume.** Before the infrastructure script:
 >    a. Database: Snowflake Postgres (the default) or a PostgreSQL 17 I operate (recommend
@@ -62,7 +52,7 @@ Fill in the placeholders and paste:
 >       private connectivity (Business Critical).
 >    d. Show me every statement you changed in the infrastructure script, then let me run it.
 >    Never invent a host, put a password in this chat (I run the `CREATE SECRET` statements
->    myself), allow `0.0.0.0/0`, or point the app at a database that is not PostgreSQL.
+>    myself), allow `0.0.0.0/0` or point the app at a database that is not PostgreSQL.
 > 2. Ask me how many records I will load and how much a fast first load matters against
 >    cost, then size the install from my answer (explain the choice in two lines):
 >    - **Cost first** (the default): keep the infrastructure script's Postgres family and
@@ -108,7 +98,7 @@ Never paste a license, password or key into the prompt: set the license secret y
 
 ### No data of your own
 
-Use the CORD data for the Senzing Snowflake preview: Senzing's official
+Use the CORD data for the Senzing Snowflake preview: the official Senzing
 [CORD](https://senzing.com/senzing-ready-data-collections-cord/) data, from its Las Vegas collection, reshaped into normalized source tables
 for six source systems. Add this to Prompt 1, before step 5, and leave the `--source`
 values to the assistant:
@@ -116,15 +106,13 @@ values to the assistant:
 > I have no data of my own; use the CORD data. Download `sz-snowflake-cord-data.tar.gz` from
 > the same release and verify it exactly like the other release files (`SHA256SUMS` and
 > its cosign bundle, the README's "Verify" section). Stop if a check fails. Extract it (`tar -xzf`), show
-> me its `README.md` and `load.sql`, and run `load.sql` from the extracted directory with
+> me its `README.md` and `load.sql` and run `load.sql` from the extracted directory with
 > my connection after I confirm. Then map each source system in it with the Senzing MCP
 > mapping tools (`mapping_workflow`; never hand-write the mapping): create one mapping
-> view per source in its schema, show me each view, and pass one `--source` per source
+> view per source in its schema, show me each view and pass one `--source` per source
 > system to the install script, listing every table the view reads: those holding the
 > record id with `--source`, those it only looks up (another system's table, such as the
 > contacts view reading `ACCOUNTS`) with `--source-via`.
-
-<sub><b>REPORT</b></sub>
 
 ## Prompt 2: a report on your data
 
@@ -135,7 +123,7 @@ When the state reads `CAUGHT_UP`, paste:
 > Connect with Snowpark using my Snowflake connection `<connection>`
 > (`Session.builder.config("connection_name", ...)`). Use a Python 3.12 virtual
 > environment with `streamlit` and `snowflake-snowpark-python`, start it with
-> `streamlit run`, open http://localhost:8501, and confirm every section renders with no
+> `streamlit run`, open http://localhost:8501 and confirm every section renders with no
 > errors in the terminal.
 >
 > Results, schema `SZ_SNOWFLAKE.SZ`: `ENTITY_RECORD` (DATA_SOURCE, RECORD_ID, ENTITY_ID,

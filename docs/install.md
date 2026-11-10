@@ -1,9 +1,3 @@
-<p>
-  <img src="../assets/senzing-logo.jpg" alt="Senzing" width="48" align="left" hspace="8">
-  <samp><b>SENZING</b></samp>
-</p>
-<br clear="left">
-
 [sz-snowflake](../README.md) / Install
 
 # Install
@@ -15,13 +9,11 @@ the [README](../README.md): prerequisites and how to verify the release files.
 Download one release's files into a directory and run the steps from there. Replace
 `<release>` with the release, for example `4.4.3-1`.
 
-<sub><b>YOUR INFRASTRUCTURE</b></sub>
-
 ## 1. Run the infrastructure script
 
-`sz-snowflake-infra-<release>.sql`: you run it, you own everything it creates, and you can
+`sz-snowflake-infra-<release>.sql`: you run it, you own everything it creates and you can
 change any of it later. **Read every statement before you run it.** It is re-runnable,
-never prints a secret, and ends with a verification query.
+never prints a secret and ends with a verification query.
 
 | It creates | Review |
 |---|---|
@@ -31,7 +23,7 @@ never prints a secret, and ends with a verification query.
 | Secrets `SZ_PG_ADMIN`, `SZ_PG_APP`, `SZ_PG_CA`, `SZ_LICENSE` | Snowflake generates both passwords (`RESET ACCESS`); the script copies them and the CA into secrets without displaying them |
 | Egress rule `SZ_PG_EGRESS` with exactly `<PG_HOST>:5432` (`<PG_HOST>:<PG_PORT>` for your own database), and integration `SZ_PG_EAI` | the only egress the app gets |
 | Procedures `SZ_PAUSE`, `SZ_UNPAUSE`, `SZ_AUTO_PAUSE`, log `SZ_PAUSE_LOG`, task `SZ_AUTO_PAUSE_TASK` (`SZ_AUTO_PAUSE`, `SZ_IDLE_PAUSE_MINUTES`, `SZ_AUTO_PAUSE_CHECK_MINUTES`, `SZ_PG_SHARED` variables) | pause to save money; `SZ_PG_SHARED = 'YES'` for a Postgres instance other workloads use: pausing then never suspends or resumes it, only the app's services and pool; auto-pause is on by default (checks every 10 minutes, pauses after 30 idle minutes, resumes when changes arrive); `SZ_AUTO_PAUSE = 'OFF'` creates no task ([Pause to save money](use.md#pause-to-save-money)) |
-| `ALTER TABLE <db>.<schema>.<table> SET CHANGE_TRACKING = TRUE;` per source table (`SZ_SOURCE_TABLES`) | required: capture needs it, only the table's owner can set it, and `SZ_REGISTER_SOURCE` refuses a table without it (`-20208`) |
+| `ALTER TABLE <db>.<schema>.<table> SET CHANGE_TRACKING = TRUE;` per source table (`SZ_SOURCE_TABLES`) | required: capture needs it, only the table's owner can set it and `SZ_REGISTER_SOURCE` refuses a table without it (`-20208`) |
 
 Exposure you accept: the egress ranges are shared by every Snowflake account in the
 region. Protection is the generated password plus `verify-full` TLS. Private Link
@@ -69,7 +61,7 @@ these, under these names:
 | Egress rule `SZ_PG_EGRESS` holding exactly `<PG_HOST>:<PG_PORT>`, in integration `SZ_PG_EAI` | the app's only egress |
 | Secrets `SZ_PG_ADMIN` and `SZ_PG_APP` (`TYPE = PASSWORD`: username and password) | the admin login creates the database and roles (`CREATEDB`, `CREATEROLE`) and is read only by the setup job; the runtime login is a plain login the setup job grants DML to |
 | Secret `SZ_PG_CA` (`TYPE = GENERIC_STRING`) | the PEM of the CA that signs the server certificate (Amazon RDS and Aurora: the region's certificate bundle from AWS) |
-| Secret `SZ_LICENSE` (`TYPE = GENERIC_STRING`) | your Senzing license, base64; empty for the evaluation limit |
+| Secret `SZ_LICENSE` (`TYPE = GENERIC_STRING`) | your SENZING® license, base64; empty for the evaluation limit |
 
 ### Choosing a database
 
@@ -82,8 +74,8 @@ supported (not SQL Server or Azure SQL Hyperscale).
 ### Bring your own PostgreSQL
 
 1. Set `SZ_PG_MODE = 'EXTERNAL'`, `SZ_PG_HOST` and `SZ_PG_PORT` at the top of the script. It
-   then skips the Snowflake Postgres instance, its ingress rule, policy and refresh task,
-   creates `SZ_PG_EGRESS` for exactly `SZ_PG_HOST:SZ_PG_PORT` and the integration, and
+   then skips the Snowflake Postgres instance, its ingress rule, policy and refresh task.
+   It creates `SZ_PG_EGRESS` for exactly `SZ_PG_HOST:SZ_PG_PORT` and the integration, and
    prints the `CREATE SECRET` statements for `SZ_PG_ADMIN`, `SZ_PG_APP` and `SZ_PG_CA`
    instead of creating them.
 2. Let the database accept TLS connections on its port from Snowflake's egress ranges
@@ -111,8 +103,6 @@ in the same cloud and region as the database (for example AWS `us-east-1` with A
 `us-east-1`). `SELECT CURRENT_REGION();` shows the account's (e.g. `AWS_US_EAST_1`). Snowflake
 does not let you choose the availability zone, so same-zone placement cannot be arranged.
 
-<sub><b>THE APP</b></sub>
-
 ## 2. Install from the bundle
 
 `sz-snowflake-install-<release>.sh` does everything from the downloaded files. Read it first
@@ -136,8 +126,9 @@ until it is resolved ([register a source](use.md#register-a-source)), so one run
 
 It runs these steps, each printed before it runs:
 
-1. **Verify** `SHA256SUMS` and the signature of every file present (the exact identity in the
-   [README](../README.md#verify)), then unpack the bundle and check its own checksums.
+1. **Verify** the signature of `SHA256SUMS` (the exact identity in the
+   [README](../README.md#verify)) and the SHA-256 of each file it uses, then unpack the bundle
+   and check its own checksums.
 2. **Create** the package database `SZ_SNOWFLAKE_PKG_DB`, an image repository `IMAGES` and a
    stage `APP_FILES`.
 3. **Load and push the images.** The script uses the bundle for your compute pool's family:
@@ -188,14 +179,12 @@ returns the references still unbound: those only you can bind, with `REGISTER_RE
 (an app cannot bind a reference itself).
 
 The app creates only its own objects (pool `<APP>_POOL`, warehouse `<APP>_WH`, tables, tasks,
-services). Next the script prints the Senzing EULA link (step 3 below). With `--accept-eula`
+services). Next the script prints the link to the Senzing End User License Agreement (EULA), step 3 below. With `--accept-eula`
 it then runs the acceptance `CALL` for you; without it, it prints that `CALL` and stops
-before setup until the EULA is accepted. It ends by running setup and start (step 5 below), registers each `--source` and
-waits for `RESOLVE_STATE = CAUGHT_UP` (`--resolve-wait`, default 1800 s), and exits non-zero
+before setup until the EULA is accepted. It ends by running setup and start (step 5 below), registers each `--source`,
+waits for `RESOLVE_STATE = CAUGHT_UP` (`--resolve-wait`, default 1800 s) and exits non-zero
 unless `SZ_HEALTH.OVERALL` reads `OK`. Verify: `SHOW REFERENCES IN APPLICATION SZ_SNOWFLAKE` lists
 the five bindings.
-
-<sub><b>LICENSE TERMS</b></sub>
 
 ## 3. Accept the Senzing EULA
 
@@ -208,14 +197,12 @@ CALL SZ_SNOWFLAKE.API.SZ_ACCEPT_EULA('I_ACCEPT_THE_SENZING_EULA');
 ```
 
 Only that exact value is accepted; anything else raises `-20109` and names the agreement.
-The app records the EULA version, its URL, the time, the user who called, and the app
+The app records the EULA version, its URL, the time, the calling user and the app
 version and label in `SZ_SNOWFLAKE.SZ.SZ_EULA_ACCEPTANCE` (`APP_ADMIN` can read it).
 `SZ_SETUP` and `SZ_START` refuse with `-20109` until it is accepted, and again after an
 upgrade to a release that carries a new EULA version. The install script does this step
 for you with `--accept-eula`. Verify: `SELECT EULA_VERSION, EULA_ACCEPTED_AT,
 EULA_ACCEPTED_BY FROM SZ_SNOWFLAKE.API.SZ_HEALTH` shows the acceptance.
-
-<sub><b>OPTIONAL</b></sub>
 
 ## 4. Set the license secret
 
@@ -224,7 +211,7 @@ Run interactively, never committed:
 `--license-file <path>`: it checks the file before any step runs (not empty, base64, a
 multiple of 4 characters) and stores it without printing it (the `ALTER SECRET` it sends is in
 your query history, as when you run it yourself). It stays yours: the app has
-`READ`, logs only its expiry date and record limit, and never sends it anywhere. If the
+`READ`, logs only its expiry date and record limit and never sends it anywhere. If the
 services are already running, `CALL SZ_SNOWFLAKE.API.SZ_RELOAD_SECRETS()` restarts them so
 they read it (secrets are read once at start). The same applies to a rotated Postgres
 password or a new CA (the infra script's `ROTATE` section).
@@ -252,8 +239,6 @@ the license; it is in the check job's spec only while that job runs, and, as wit
 `ALTER SECRET`, the statement you run is in your query history.
 `SZ_HEALTH` shows the running license (`LICENSE_EXPIRES`, `LICENSE_DAYS_LEFT`,
 `LICENSE_RECORD_LIMIT`, `LICENSE_RECORDS_USED`) and warns 30 days before it expires.
-
-<sub><b>FIRST RUN</b></sub>
 
 ## 5. Run setup and start
 
@@ -285,9 +270,9 @@ SELECT SETUP_PHASE, SETUP_RUNNING_SECS FROM SZ_SNOWFLAKE.API.SZ_HEALTH;
 
 `SETUP_PHASE` reads `waiting_for_job_container` while the pool brings up a node and pulls
 the image, then the job's phase (`pg_connect`, `provision`, `senzing_schema`,
-`sz_snowflake_schema`, `engine_bootstrap`), and `NULL` once the run ended. The result's
+`sz_snowflake_schema`, `engine_bootstrap`) and `NULL` once the run ended. The result's
 `timing` splits where the time went: `until_job_started_secs` (node and image),
-`in_job_secs`, and `phases` with seconds each (the engine bootstrap also by part:
+`in_job_secs` and `phases` with seconds each (the engine bootstrap also by part:
 `default_config`, `engine_init`, `data_sources`, `license_and_facts`).
 
 `SZ_START` creates the pool, the warehouse, the tasks, both services (`RESOLVER_INSTANCES`
@@ -296,13 +281,11 @@ services and raises `-20107` with both statuses when they are not `READY`. Eithe
 refreshes `SZ_HEALTH` before returning, so `OVERALL` is current right after the call. The
 install script exits non-zero unless `OVERALL` reads `OK`.
 
-<sub><b>CORD DATA</b></sub>
-
 ## No data of your own? Load the CORD data
 
-`sz-snowflake-cord-data.tar.gz` is the CORD data for the Senzing Snowflake preview: Senzing's
-official [CORD](https://senzing.com/senzing-ready-data-collections-cord/) data, from its Las Vegas collection, reshaped into normalized source
-tables for six source systems (about 200,000 records). The original JSONL is on the
+`sz-snowflake-cord-data.tar.gz` is the official Senzing
+[Collections Of Relatable Data (CORD)](https://senzing.com/senzing-ready-data-collections-cord/) for the Senzing Snowflake preview, from its Las Vegas collection, reshaped into normalized source
+tables for six source systems (about 200,000 records). The original JSON Lines (JSONL) data is on the
 [CORD page](https://senzing.com/senzing-ready-data-collections-cord/). Download it with the release and verify it like the other files
 ([README](../README.md#verify)), then:
 
@@ -314,7 +297,7 @@ snow sql -c <connection> -f load.sql
 ```
 
 `load.sql` creates the database `SZ_CORD_DATA` (change the `SET` at its top for another
-name), one schema per source system, every table with `CHANGE_TRACKING = TRUE`, and a
+name), one schema per source system, every table with `CHANGE_TRACKING = TRUE` and a
 stage `PUBLIC.CORD_STAGE`; it uploads the CSV files with `PUT` (so run it from the extracted
 directory) and loads them with `COPY INTO`. Re-running it is safe. Its last query lists
 every table's loaded and expected row counts; they must be equal. Without a client that
@@ -322,7 +305,7 @@ can `PUT`, upload each source directory to the stage in Snowsight and run the ot
 statements.
 
 The tables are ordinary business tables, not Senzing records: map each source system to
-Senzing before you register it (next).
+the Senzing entity specification before you register it (next).
 
 Next: [register a source](use.md#register-a-source). If a step fails:
 [troubleshooting](troubleshooting.md).
