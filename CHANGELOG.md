@@ -10,6 +10,17 @@ that restarts at 1 for each Senzing SDK version.
 
 ## [Unreleased]
 
+## [4.4.3-7] - 2026-11-10
+
+### Fixed
+
+- The 4.4.3-6 install script stopped every real install at P1 with "the bundle lacks
+  sz-snowflake-infra-4.4.3-6.sql": it still required the infra and install scripts inside the
+  bundle after the release stopped copying them there. It now checks only the bundle's own
+  files.
+- `--dry-run` with `--loader docker` and the Docker daemon down prints a note instead of
+  refusing, the same as a missing tool: a dry run runs nothing.
+
 ## [4.4.3-6] - 2026-11-09
 
 ### Changed
