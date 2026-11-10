@@ -1,9 +1,3 @@
-<p>
-  <img src="../assets/senzing-logo.jpg" alt="Senzing" width="48" align="left" hspace="8">
-  <samp><b>SENZING</b></samp>
-</p>
-<br clear="left">
-
 [sz-snowflake](../README.md) / Troubleshooting
 
 # Troubleshooting
@@ -19,8 +13,6 @@ the codes below (the failing ones first). `FAIL_CODES` lists only the codes that
 `OVERALL` read `FAIL`, `WARN_CODES` the rest. `UPGRADE_PENDING` is a `FAIL`: claiming stays
 paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes the patch).
 
-<sub><b>FIRST STOP</b></sub>
-
 ## Where to look
 
 | Failure | Read |
@@ -32,8 +24,6 @@ paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes
 | the capture task | `SZ_HEALTH.CAPTURE_TASK_STATE`, `CAPTURE_LAST_ERROR`, `SOURCE_ERRORS`; `SZ_WATCH` refreshes them every 10 minutes |
 | the replica | `SELECT INSTANCE, APPLY_SECS, ENTITIES_LIVE FROM SZ_SNOWFLAKE.SZ.SZ_APPLY_LOG ORDER BY APPLIED_AT DESC LIMIT 20` (one row per replicator claim: only replicator instances appear) |
 | one resolver instance's work | `SELECT INSTANCE, STATE, COUNT(*), SUM(OK_COUNT) FROM SZ_SNOWFLAKE.SZ.SZ_BATCH GROUP BY 1, 2` (`INSTANCE` stays set on `DONE` batches) |
-
-<sub><b>BY SYMPTOM</b></sub>
 
 ## Symptoms
 
@@ -64,7 +54,7 @@ paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes
 | setup fails `unsafe_login` (`CREATE on database ..` through `snowflake_write`) | an older release: Snowflake Postgres' `RESET ACCESS` adds the `application` login to `snowflake_write`, which may create schemas. This release's setup revokes that grant; after the infrastructure script's `ROTATE` run `SZ_SETUP('install')` again to revoke it once more |
 | records you never loaded appear (`SZ_HEALTH` `EXISTING_RECORDS`) | `PG_DATABASE` held an earlier install's data; `LAST_SETUP_WARNINGS` names them. Start clean with `SZ_UNINSTALL('<PG_DATABASE>')` or a new `PG_DATABASE` |
 | capture for one source stops (`SOURCES_FAILED` / `SOURCES_STALE`) | change tracking turned off after registration, or the stream went stale; `SOURCE_ERRORS` carries the fix; `SZ_REGISTER_SOURCE` again repairs it |
-| `SZ_SETUP` / `SZ_START` refuses with `-20109` (the Senzing End User License Agreement is not accepted) | read https://senzing.com/end-user-license-agreement/, then `CALL SZ_SNOWFLAKE.API.SZ_ACCEPT_EULA('I_ACCEPT_THE_SENZING_EULA')` as `APP_ADMIN` ([install](install.md#3-accept-the-senzing-eula)). After an upgrade it means the new release carries a new EULA version: accept again, then re-run (`SZ_UPGRADE` resumes at its step) |
+| `SZ_SETUP` / `SZ_START` refuses with `-20109`: the Senzing End User License Agreement (EULA) is not accepted | read https://senzing.com/end-user-license-agreement/, then `CALL SZ_SNOWFLAKE.API.SZ_ACCEPT_EULA('I_ACCEPT_THE_SENZING_EULA')` as `APP_ADMIN` ([install](install.md#3-accept-the-senzing-eula)). After an upgrade it means the new release carries a new EULA version: accept again, then re-run (`SZ_UPGRADE` resumes at its step) |
 | `SZ_ACCEPT_EULA` raises `-20109` | the value was not exactly `I_ACCEPT_THE_SENZING_EULA` (upper case, no spaces) |
 | `SZ_SETUP` / `SZ_START` refuses with `-20102`, naming a reference | the reference or secret is not bound; bind it ([install](install.md#2-install-from-the-bundle)) and re-run |
 | `SZ_SETUP` raises `-20101` | the job failed or never ran: the message starts with `reason=.. error=..`; the full result is in `SZ_SETUP_LOG` (above). Reasons below |
@@ -88,8 +78,6 @@ paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes
 | exit 1 `unsafe runtime login` | the `application` login holds a privilege it must not; `error` shows the ACL |
 | a job that never scheduled | `error` carries the pool's message (`Unschedulable ..`): raise `START_WAIT_SECS` or check `POOL_FAMILY` (an ARM family for `linux/arm64`) |
 
-<sub><b>REFERENCE</b></sub>
-
 ## `SZ_HEALTH` codes
 
 `OVERALL` is `FAIL` when any of the first group is present, `WARN` for the second.
@@ -109,7 +97,7 @@ paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes
 | `SERVICE_STATE` | a container is not `READY` while not suspended | the container log; `SZ_START` re-points and resumes |
 | `STATUS_FAILED` | a service instance wrote a `FAILED` row (`LAST_FAILED_EXIT`: reason, code, hint) | fix what the hint names; `SZ_START` clears the old rows |
 | `PG_TOO_SMALL` | `PG_COMPUTE_FAMILY` has less than 8 GB (`BURST_*`, `STANDARD_M`): not supported | `ALTER POSTGRES INSTANCE SZ_PG SET COMPUTE_FAMILY = 'STANDARD_L'` (or larger), then `SZ_SET_CONFIG('PG_COMPUTE_FAMILY', 'STANDARD_L')` |
-| `PG_UNREACHABLE` | a service ended on a Postgres error (`LAST_FAILED_EXIT` reads `reason=pg..`: connect, TLS, login, or the server refused the session) | the setup reasons below; a server out of memory or sessions: [Sizing](use.md#sizing) |
+| `PG_UNREACHABLE` | a service ended on a Postgres error (`LAST_FAILED_EXIT` reads `reason=pg..`: connect, TLS, login or the server refused the session) | the setup reasons below; a server out of memory or sessions: [Sizing](use.md#sizing) |
 | `PARKED` | a resolver parked (`parked_reason`: the license record limit or expiry), or the replicator parked on `shape_mismatch` | license: set `SZ_LICENSE`, `SZ_RELOAD_SECRETS()`; shape: `CALL SZ_RESYNC()` rebuilds the replica and un-parks the replicator |
 | `DEGRADED` | a resolver instance reports `DEGRADED` (engine or repository errors) | `SZ_STATUS()` and the container log |
 | `SHAPE_MISMATCH` | the replica's layout is not this version's | `CALL SZ_RESYNC()` |
@@ -125,7 +113,7 @@ paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes
 | `DEAD` | entities or redo records that failed `TIMEOUT_MAX_ATTEMPTS` times | the container log; `SZ_RESYNC()` after the cause is fixed |
 | `STARTING_STUCK` | an instance has been `STARTING` longer than `START_WAIT_SECS`: it is still retrying its Postgres connect | Postgres down, full or out of memory; the container log names the error |
 | `LICENSE_EXPIRING` | the license expires within 30 days (`LICENSE_DAYS_LEFT`) | renew it, then update the secret and `SZ_RELOAD_SECRETS()` |
-| `LICENSE_EVALUATION` | no license: the engine runs Senzing's 500-record evaluation limit (`LICENSE_RECORD_LIMIT`) | put your license in the license secret, then `SZ_RELOAD_SECRETS()` |
+| `LICENSE_EVALUATION` | no license: the engine runs with the 500-record evaluation limit (`LICENSE_RECORD_LIMIT`) | put your license in the license secret, then `SZ_RELOAD_SECRETS()` |
 | `LICENSE_NEAR_LIMIT` | the crosswalk holds 90% or more of the license's record limit (`LICENSE_RECORDS_USED`) | a license with a larger limit |
 | `CONNECTION_BUDGET` | `CONNECTION_DEMAND`, the sessions the services can hold at `RESOLVER_MAX_INSTANCES`, exceeds `CONNECTION_BUDGET` | lower `RESOLVER_MAX_INSTANCES` or the threads, or size Postgres up and set `PG_COMPUTE_FAMILY` |
 | `APPLY_LAG` | work queued and no apply for an hour | replicator down (above), or the warehouse: `SZ_WATCH` sizes `<APP>_WH` up when an apply passes `APPLY_SLOW_SECS` |
