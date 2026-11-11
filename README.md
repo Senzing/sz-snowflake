@@ -209,6 +209,8 @@ sha256sum --ignore-missing -c SHA256SUMS   # every file you downloaded must prin
 The bundle contains the images, so verifying it verifies them. The install script repeats
 these checks (the signature against the exact identity, then the SHA-256 of each file it
 uses, which must be listed) before it unpacks the bundle, and stops when one fails.
+`./sz-snowflake-install-<release>.sh <release> --check-only` runs those checks and unpacks the
+bundle for real, then stops: no Snowflake connection, nothing installed.
 
 ## Versions
 

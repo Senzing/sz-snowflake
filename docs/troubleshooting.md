@@ -108,6 +108,7 @@ paused until `SZ_UPGRADE` runs (the install script runs it when a re-run changes
 | `STATUS_STALE` | no resolver status for 2 hours while running | the container log; `SZ_STATUS()` |
 | `IMAGE_MISMATCH` | containers run more than one image release, or not the one setup ran | finish the upgrade (`SZ_UPGRADE`, `SZ_START`) |
 | `PENDING_OLD` | the oldest pending key is over an hour old | resolvers down or parked (above), or `BACKLOG_*` sizing |
+| `PG_DISK_HIGH` | the Postgres database uses 75% of its allocated storage (`PG_DB_BYTES` of `PG_STORAGE_GB`) | before Snowflake grows it (read-only meanwhile): `ALTER POSTGRES INSTANCE SZ_PG SET STORAGE_SIZE_GB = <gb>`, then `SZ_CONFIGURE({'PG_STORAGE_GB': '<gb>'})` |
 | `LEASES_EXPIRED` | a claimed batch outlived its lease (a resolver died mid-batch) | the next cut re-batches it; check `STATUS_ROWS` |
 | `REJECTED_KEYS` | records the engine rejected (`SZ.SZ_RESULT` has the reason per key) | fix the records; `SZ_REQUEUE_REJECTED('<CODE>')` |
 | `DEAD` | entities or redo records that failed `TIMEOUT_MAX_ATTEMPTS` times | the container log; `SZ_RESYNC()` after the cause is fixed |

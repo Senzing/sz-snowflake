@@ -10,6 +10,55 @@ that restarts at 1 for each Senzing SDK version.
 
 ## [Unreleased]
 
+## [4.4.3-8] - 2026-11-10
+
+### Added
+
+- `--check-only` on the install script: verifies the release files (signature and checksums),
+  unpacks the bundle and checks its contents for real, then stops. It needs no Snowflake
+  connection and installs nothing. A `--dry-run` does not unpack the bundle. The release build
+  now runs `--check-only` on each architecture's bundle before publishing, so a release whose
+  install script cannot accept its own bundle is never published (4.4.3-6 was).
+- `SZ_HEALTH` warns `PG_DISK_HIGH` at 75% of the instance's allocated storage, and shows
+  `PG_STORAGE_GB` and `PG_DB_BYTES`. The install script sets `PG_STORAGE_GB`.
+
+### Changed
+
+- Paused installs cost much less: the watch and retention tasks are suspended with the app
+  (`SZ_SUSPEND`, resumed by `SZ_RESUME`), the auto-pause task checks hourly while paused
+  (`SZ_AUTO_PAUSE_PAUSED_CHECK_MINUTES`, 60; every `SZ_AUTO_PAUSE_CHECK_MINUTES` while running)
+  and `SZ_SUSPEND` sizes the app warehouse back to X-Small.
+- Postgres storage is sized from `SZ_EXPECTED_RECORDS` (twice ~12 KB a record, 10..65535 GB;
+  1,000,000 records: 23 GB) instead of a fixed 250 GB; an explicit `SZ_PG_STORAGE_GB` still
+  wins. Storage is billed on allocation and never shrinks.
+
+### Fixed
+
+- The install script reads a relative `--license-file` from the directory it was started in. It used to fail at the license step, after the image push, because it reads the license from inside `--assets`.
+- A failed `SZ_UNPAUSE` no longer stops auto-pause: when the app is running but `PAUSED_AT` is
+  still set, the task clears it and pauses again once idle.
+- The install no longer exits 1 after a successful load: `PENDING_OLD` counts only while work
+  is live (it read a 10-minute snapshot after `CAUGHT_UP`).
+- The app warehouse no longer grows to Medium while idle, and `APPLY_LAG` no longer warns on an
+  idle install: both read how long the oldest queued entity had waited when the resolver last
+  wrote its status (`SZ_HEALTH.QUEUE_AGE_SECS`), not a statistics estimate or the time since
+  the last apply, which grows while idle.
+- When Postgres turned read-only (Snowflake grows the disk in read-only mode), the replicator
+  could leave a claim it was applying or releasing for the lease sweep, 20 minutes later. A
+  read-only error now counts as transient: the replicator retries it and catches up as soon as
+  Postgres is writable again. The resolver already retried through it.
+- A resolver batch whose keys were all done but whose ids were still being committed stopped
+  renewing its lease: a commit stalled longer than the lease (a read-only Postgres) handed the
+  batch to a second claim, which ran it again. It now renews until the commit lands.
+- An upgrade of a paused install, or one whose image push outlasted the idle window, failed
+  with a Postgres connect timeout: auto-pause had suspended Postgres. The install script now
+  unpauses a paused install (`SZ_UNPAUSE('install')`) before the steps that need Postgres.
+
+### Documentation
+
+- The app's own page in Snowsight (the application README) follows the Senzing brand and
+  editorial rules, matching this repository's README.
+
 ## [4.4.3-7] - 2026-11-10
 
 ### Fixed
