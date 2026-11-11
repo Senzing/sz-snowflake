@@ -214,11 +214,15 @@ Postgres needs at least 8 GB: `STANDARD_L` (2 cores, 8 GB, 40,000 IOPS, 0.0712 c
 large first load use `STANDARD_XL` or larger, then size it back down.
 
 Postgres storage is billed on what is allocated, not what is used: the infrastructure
-script allocates 250 GB (`SZ_PG_STORAGE_GB`). Snowflake grows it on its own when the disk
+script allocates twice what `SZ_EXPECTED_RECORDS` needs at about 12 KB a record (1,000,000
+records by default: 23 GB; at least 10 GB), or exactly `SZ_PG_STORAGE_GB` when you set it.
+Set `SZ_EXPECTED_RECORDS` before the first run: a larger allocation cannot be undone.
+`SZ_HEALTH` warns `PG_DISK_HIGH` once the database uses 75% of it. Snowflake grows it on its own when the disk
 is nearly full (85% used with less than 50 GB free, or 90% used), by 25% for a 100 GB to
 999 GB disk and 15% above that, and puts the instance in read-only mode while it does.
 It never shrinks it. To grow it at a time you choose instead, watch the disk and resize
-first: `ALTER POSTGRES INSTANCE SZ_PG SET STORAGE_SIZE_GB = <gb>`
+first: `ALTER POSTGRES INSTANCE SZ_PG SET STORAGE_SIZE_GB = <gb>`, then
+`CALL <app>.API.SZ_CONFIGURE({'PG_STORAGE_GB': '<gb>'})` so `PG_DISK_HIGH` uses the new size
 ([Snowflake Postgres maintenance](https://docs.snowflake.com/en/user-guide/snowflake-postgres/postgres-maintenance)).
 
 Resizing and server settings go in separate statements. The instance restarts for a resize;
@@ -291,12 +295,14 @@ SELECT CONVERT_TIMEZONE('America/New_York', AT) AS AT_ET, ACTION, TRIGGERED_BY, 
 ```
 
 **Auto-pause is on by default.** A task (`SZ_AUTO_PAUSE_TASK`, every
-`SZ_AUTO_PAUSE_CHECK_MINUTES`, 10) pauses the
+`SZ_AUTO_PAUSE_CHECK_MINUTES`, 10, while running and every `SZ_AUTO_PAUSE_PAUSED_CHECK_MINUTES`,
+60, while paused) pauses the
 install after `SZ_IDLE_PAUSE_MINUTES` (30) with everything resolved and no new change, and
 unpauses it when new changes are captured (capture keeps running while paused, so
 `SZ_HEALTH.BATCHES_READY` or `QUEUED_KEYS` shows the waiting work). The cost: the first
-change after a pause waits up to the check interval plus 3-5 minutes for Postgres and the
-pool to resume. It never
+change after a pause waits up to the paused check interval plus 3-5 minutes for Postgres and
+the pool to resume. While paused the app's watch and retention tasks are suspended too; only
+capture and this check run. It never
 re-pauses within the idle window after an unpause, never pauses while setup runs or before
 the services are `READY`, counts the idle time from the latest capture, apply, setup run,
 `SZ_START`/`SZ_RESUME` or source registration (`SZ_HEALTH.LAST_ACTIVITY_AT`) and leaves alone an app you stopped or
@@ -306,7 +312,8 @@ the infrastructure script and run its `INSTALL` section again:
 ```sql
 SET SZ_AUTO_PAUSE = 'OFF';               -- or 'ON'
 SET SZ_IDLE_PAUSE_MINUTES = 60;          -- 10..1440
-SET SZ_AUTO_PAUSE_CHECK_MINUTES = 10;    -- 5..60: a shorter check wakes sooner, costs more
+SET SZ_AUTO_PAUSE_CHECK_MINUTES = 10;    -- 5..60: while running
+SET SZ_AUTO_PAUSE_PAUSED_CHECK_MINUTES = 60;  -- 5..1440: while paused; shorter wakes sooner, costs more
 ```
 
 The task runs as the role that ran the script, which needs `OPERATE` (or ownership) on

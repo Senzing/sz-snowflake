@@ -19,10 +19,10 @@ never prints a secret and ends with a verification query.
 |---|---|
 | `SZ_INFRA_DB.SZ_INFRA` (`<SZ_PREFIX>_INFRA_DB`; the prefix, default `SZ`, also names `SZ_PG`, `SZ_PG_POLICY` and `SZ_PG_EAI`) | home for your rules, secrets, procedure and task |
 | Ingress rule `SZ_PG_INGRESS`, procedure `SZ_REFRESH_PG_INGRESS`, daily task `SZ_PG_INGRESS_TASK`, policy `SZ_PG_POLICY` | admits only your region's Snowflake egress ranges from `SYSTEM$GET_SNOWFLAKE_EGRESS_IP_RANGES()`; never `0.0.0.0/0` |
-| Postgres instance `SZ_PG` (PostgreSQL 17, JIT off; `SZ_PG_FAMILY`, `SZ_PG_STORAGE_GB`, `SZ_PG_HA` variables) | size and high availability. Postgres needs at least 8 GB: `STANDARD_L` (2 cores, 8 GB, 40,000 IOPS, 0.0712 credits/h on AWS) or larger; burstable families are not supported (CPU throttling, 100 GB storage cap); the script refuses a smaller family. The default `STANDARD_L` is the cheapest supported; for a large first load use `STANDARD_XL` or larger ([Sizing](use.md#sizing)) |
+| Postgres instance `SZ_PG` (PostgreSQL 17, JIT off; `SZ_PG_FAMILY`, `SZ_EXPECTED_RECORDS`, `SZ_PG_STORAGE_GB`, `SZ_PG_HA` variables) | size and high availability. Postgres needs at least 8 GB: `STANDARD_L` (2 cores, 8 GB, 40,000 IOPS, 0.0712 credits/h on AWS) or larger; burstable families are not supported (CPU throttling, 100 GB storage cap); the script refuses a smaller family. The default `STANDARD_L` is the cheapest supported; for a large first load use `STANDARD_XL` or larger ([Sizing](use.md#sizing)) |
 | Secrets `SZ_PG_ADMIN`, `SZ_PG_APP`, `SZ_PG_CA`, `SZ_LICENSE` | Snowflake generates both passwords (`RESET ACCESS`); the script copies them and the CA into secrets without displaying them |
 | Egress rule `SZ_PG_EGRESS` with exactly `<PG_HOST>:5432` (`<PG_HOST>:<PG_PORT>` for your own database), and integration `SZ_PG_EAI` | the only egress the app gets |
-| Procedures `SZ_PAUSE`, `SZ_UNPAUSE`, `SZ_AUTO_PAUSE`, log `SZ_PAUSE_LOG`, task `SZ_AUTO_PAUSE_TASK` (`SZ_AUTO_PAUSE`, `SZ_IDLE_PAUSE_MINUTES`, `SZ_AUTO_PAUSE_CHECK_MINUTES`, `SZ_PG_SHARED` variables) | pause to save money; `SZ_PG_SHARED = 'YES'` for a Postgres instance other workloads use: pausing then never suspends or resumes it, only the app's services and pool; auto-pause is on by default (checks every 10 minutes, pauses after 30 idle minutes, resumes when changes arrive); `SZ_AUTO_PAUSE = 'OFF'` creates no task ([Pause to save money](use.md#pause-to-save-money)) |
+| Procedures `SZ_PAUSE`, `SZ_UNPAUSE`, `SZ_AUTO_PAUSE`, log `SZ_PAUSE_LOG`, task `SZ_AUTO_PAUSE_TASK` (`SZ_AUTO_PAUSE`, `SZ_IDLE_PAUSE_MINUTES`, `SZ_AUTO_PAUSE_CHECK_MINUTES`, `SZ_AUTO_PAUSE_PAUSED_CHECK_MINUTES`, `SZ_PG_SHARED` variables) | pause to save money; `SZ_PG_SHARED = 'YES'` for a Postgres instance other workloads use: pausing then never suspends or resumes it, only the app's services and pool; auto-pause is on by default (checks every 10 minutes, hourly while paused, pauses after 30 idle minutes, resumes when changes arrive); `SZ_AUTO_PAUSE = 'OFF'` creates no task ([Pause to save money](use.md#pause-to-save-money)) |
 | `ALTER TABLE <db>.<schema>.<table> SET CHANGE_TRACKING = TRUE;` per source table (`SZ_SOURCE_TABLES`) | required: capture needs it, only the table's owner can set it and `SZ_REGISTER_SOURCE` refuses a table without it (`-20208`) |
 
 Exposure you accept: the egress ranges are shared by every Snowflake account in the
@@ -109,6 +109,8 @@ does not let you choose the availability zone, so same-zone placement cannot be 
 (`--dry-run` prints every step and changes nothing). Before any step it checks every
 prerequisite (tools, connection and role, the infra objects, each `--source` view and table,
 including `CHANGE_TRACKING`) and lists every problem at once; a dry run runs the same checks.
+A dry run does not unpack the bundle. `--check-only` verifies the release files and unpacks the
+bundle for real, then stops before Snowflake.
 
 ```bash
 ./sz-snowflake-install-<release>.sh <release> --pg-host <PG_HOST> --operator-role <role> [--role <role>] \
