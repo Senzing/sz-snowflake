@@ -10,6 +10,24 @@ that restarts at 1 for each Senzing SDK version.
 
 ## [Unreleased]
 
+## [4.4.3-9] - 2026-11-11
+
+### Changed
+
+- The compute pool starts with a node for each container the services start with
+  (`RESOLVER_INSTANCES` plus the replicator), not one. Every start and resume used to wait
+  about 2 minutes for a second node ("insufficient memory resources").
+- From the auto-pause task, an unpause no longer waits in the task for the services. When
+  they are not up it starts them, logs `unpause_started` and returns; the next check finishes
+  the unpause once Snowflake reports them `READY`. After hours paused, Snowflake took 19 and
+  30 minutes to provision the pool's nodes, and the task was billed while it waited.
+
+### Fixed
+
+- A start or resume that times out names the compute pool's state, active and target nodes
+  and Snowflake's status message (`DESC COMPUTE POOL`), so a pool still provisioning or out
+  of capacity is told apart from a failing service.
+
 ## [4.4.3-8] - 2026-11-10
 
 ### Added

@@ -159,7 +159,7 @@ SZ_SNOWFLAKE.SZ.SZ_CONFIG WHERE KIND = 'SETTING'` lists them. Changes to a pipel
 | `BACKLOG_KEYS`, `BACKLOG_WAREHOUSE_SIZE` | 1,000,000, `MEDIUM` | a backlog this large scales `<APP>_WH` up from `XSMALL` |
 | `APPLY_SLOW_SECS` | 60 | an apply slower than this scales `<APP>_WH` up |
 | `CLAIM_MAX_WAIT_SECS` | 60 | see below (1..900) |
-| `POOL_FAMILY`, `POOL_MAX_NODES` | `GEN_ARM_G1_2`, empty | the compute pool: the cheapest nodes with more than 4 GB (1 vCPU, 6 GiB; `linux/arm64` images), one container each; empty `POOL_MAX_NODES` is a node for each resolver `RESOLVER_MAX_INSTANCES` allows, the replicator and the setup job; any family works (an x86 one takes the `linux/amd64` images). A new family takes effect at `SZ_START`, which stops the services and recreates the pool |
+| `POOL_FAMILY`, `POOL_MAX_NODES` | `GEN_ARM_G1_2`, empty | the compute pool: the cheapest nodes with more than 4 GB (1 vCPU, 6 GiB; `linux/arm64` images), one container each; empty `POOL_MAX_NODES` is a node for each resolver `RESOLVER_MAX_INSTANCES` allows, the replicator and the setup job. The pool starts with a node for each container the services start with (`RESOLVER_INSTANCES` plus the replicator), so a start or resume brings them up together; any family works (an x86 one takes the `linux/amd64` images). A new family takes effect at `SZ_START`, which stops the services and recreates the pool |
 | `RESOLVER_INSTANCES`, `RESOLVER_MAX_INSTANCES` | 1, empty | the resolvers autoscale on CPU between the two. Empty maximum: as many as Postgres can feed, 2 resolver CPUs per core of `PG_COMPUTE_FAMILY` (4 on `STANDARD_L`, 8 on `STANDARD_XL`; 4 when the family is not set or `EXTERNAL`). A number caps it there (see [Sizing](#sizing)) |
 | `RESOLVER_CPU`, `RESOLVER_THREADS`, `RESOLVER_MEMORY` | 1, empty, empty | per resolver; empty threads are 6 x the CPU (at least 2: about 20% of them, at least 1, re-evaluate pending work, the rest load records; 6 threads are 5 + 1), empty memory is 4 GiB + 0.5 GiB per thread, at most what one `POOL_FAMILY` node can give a container, at least 4 GiB |
 | `REPLICATOR_INSTANCES`, `REPLICATOR_CPU`, `REPLICATOR_THREADS`, `REPLICATOR_MEMORY` | 1, 1, empty, empty | the replicator, sized the same way |
@@ -301,7 +301,10 @@ install after `SZ_IDLE_PAUSE_MINUTES` (30) with everything resolved and no new c
 unpauses it when new changes are captured (capture keeps running while paused, so
 `SZ_HEALTH.BATCHES_READY` or `QUEUED_KEYS` shows the waiting work). The cost: the first
 change after a pause waits up to the paused check interval plus 3-5 minutes for Postgres and
-the pool to resume. While paused the app's watch and retention tasks are suspended too; only
+the pool to resume. After hours paused, Snowflake can take longer to provision the pool's
+nodes (19 and 30 minutes have been observed). The check does not wait for them: it starts
+the services, logs `unpause_started` and finishes the unpause (`unpause`) at the first check
+after Snowflake reports them `READY`. While paused the app's watch and retention tasks are suspended too; only
 capture and this check run. It never
 re-pauses within the idle window after an unpause, never pauses while setup runs or before
 the services are `READY`, counts the idle time from the latest capture, apply, setup run,
