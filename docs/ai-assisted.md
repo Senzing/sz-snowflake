@@ -9,7 +9,12 @@ report on the results. You watch and answer its questions; it never accepts the 
 End User License Agreement (EULA) on your behalf.
 
 The assistant uses the Snowflake connection it already has, so you do not log in to
-Snowflake separately.
+Snowflake separately. That connection's role is the one the scripts run as: make it
+`ACCOUNTADMIN` (or a role granted what the infrastructure script's header lists). An
+assistant's shell can carry its own session's role into `snow`, whatever `--role` says;
+in Cortex Code set `SNOWFLAKE_CONNECTIONS_<CONNECTION>_ROLE=ACCOUNTADMIN` before you start
+it. The infrastructure script stops at I0, before it creates anything, when the role falls
+short.
 
 ## Before you start
 
@@ -50,7 +55,7 @@ Fill in the placeholders and paste:
 >       stop if they differ.
 >    c. Connectivity: public, with Snowflake's egress ranges allowed on the database, or
 >       private connectivity (Business Critical).
->    d. Show me every statement you changed in the infrastructure script, then let me run it.
+>    d. Show me every statement you changed in the infrastructure script, then wait for step 3.
 >    Never invent a host, put a password in this chat (I run the `CREATE SECRET` statements
 >    myself), allow `0.0.0.0/0` or point the app at a database that is not PostgreSQL.
 > 2. Ask me how many records I will load and how much a fast first load matters against
@@ -66,12 +71,14 @@ Fill in the placeholders and paste:
 >    For my own database the size goes to the app instead: `--set PG_COMPUTE_FAMILY=EXTERNAL`,
 >    `--set PG_MEMORY_GIB=<its memory>`, `--set PG_MAX_CONNECTIONS=<its max_connections>`.
 > 3. Show me `sz-snowflake-infra-<release>.sql` with the size you chose, then run it with
->    my connection after I confirm.
+>    my connection, as `ACCOUNTADMIN` (`USE ROLE ACCOUNTADMIN;` first), after I confirm.
 > 4. Open https://senzing.com/end-user-license-agreement/ for me and ask whether I accept
 >    it. Pass `--accept-eula` in the next step only if I say yes.
-> 5. Run `sz-snowflake-install-<release>.sh` (read it and run `--dry-run` first) with
+> 5. Run `sz-snowflake-install-<release>.sh` (read it, then run it with `--check-only`,
+>    which verifies and unpacks the release files, and `--dry-run`, which prints every
+>    step, before the real run) with
 >    `--connection <connection>`, `--pg-host` set to the `PG_HOST` the infrastructure script
->    printed, `--set PG_COMPUTE_FAMILY=<the family it printed>`, `--operator-role <role>`,
+>    printed, `--set PG_COMPUTE_FAMILY=<the family it printed>`, `--operator-role` set to the role I run it as,
 >    and one `--source` per data source (every base table needs change tracking: if one
 >    lacks it, show me `ALTER TABLE <db.schema.table> SET CHANGE_TRACKING = TRUE;` to run
 >    as the table owner, then re-run this step):

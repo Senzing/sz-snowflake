@@ -8,7 +8,42 @@ Versions here are the releases of sz-snowflake, `<senzing_version>-<build>`
 (for example `4.4.3-1`): the SENZING® SDK version the release carries and a build counter
 that restarts at 1 for each Senzing SDK version.
 
-## [Unreleased]
+## [4.4.3-10] - 2026-11-13
+
+### Changed
+
+- Postgres storage starts at 50 GB (`SZ_PG_STORAGE_GB`), and the infrastructure script no
+  longer sizes it from `SZ_EXPECTED_RECORDS`. A first load writes write-ahead log faster than
+  Postgres archives it: a 1,000,000-record load peaked at 41 GB on disk for 12 GB of data.
+  Snowflake grows a nearly full disk on its own, but a few minutes late: a 10 GB disk filled
+  first and Postgres stopped. An edited value that is not a whole number of at least 10 GB
+  stops the script at I7 (`-20926`) before Postgres is created.
+- Removed the `PG_DISK_HIGH` warning and the `PG_STORAGE_GB` setting. Snowflake grows the
+  disk without help, and the app only knew the size from install time, so the warning stayed
+  on after a grow. `SZ_HEALTH` still shows the database size (`PG_DB_BYTES`).
+
+### Fixed
+
+- `RESOLVE_STATE` no longer reads `CAUGHT_UP` while redo is still being processed. It
+  read `CAUGHT_UP` with redo records left, and entity and relationship counts kept
+  changing for a minute or more after. The resolver now writes its status when redo
+  starts and when it drains, and `CAUGHT_UP` waits for the apply of what redo changed.
+  With several resolvers, the newest drain any of them noted counts.
+- The install script no longer refuses an edited infrastructure script. Its verify step
+  (P1) checked that script's SHA-256 too, and the AI-assisted guide has the assistant edit it
+  in the download directory, so the install stopped with `sz-snowflake-infra-<release>.sql:
+  FAILED`. It still checks the bundles and itself; the infrastructure script is verified when
+  you download it (README "Verify").
+- The infrastructure script checks its role first (I0, `-20925`). It stops before creating
+  anything when the primary role and the roles it inherits lack `CREATE DATABASE`,
+  `CREATE NETWORK POLICY`, `CREATE INTEGRATION` or `CREATE POSTGRES INSTANCE`. A run as
+  `SYSADMIN` used to create the database, then fail at I6.
+
+### Documentation
+
+- AI-assisted guide: run as `ACCOUNTADMIN`, and set the assistant's connection role (Cortex
+  Code: `SNOWFLAKE_CONNECTIONS_<CONNECTION>_ROLE`), since its shell can carry its own
+  session's role into `snow`. Run `--check-only` as well as `--dry-run` before the install.
 
 ## [4.4.3-9] - 2026-11-11
 

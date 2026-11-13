@@ -102,8 +102,8 @@ FROM SZ_SNOWFLAKE.API.SZ_HEALTH;
 `RESOLVE_STATE` is the done signal: `NO_SOURCES`, `SOURCES_FAILED` (a source's capture
 failed: never done until it is fixed, `SOURCE_ERRORS` says how) → `WAITING_FOR_CAPTURE` (registered or
 changed rows not yet captured and cut into a batch) → `RESOLVING` (batches in the resolver,
-or results not yet written back) → `CAUGHT_UP` (everything captured so far is resolved and
-in `ENTITY_RECORD`). Do not use `PENDING_KEYS` for this: it is a snapshot taken every 10
+redo still being processed, or results not yet written back) → `CAUGHT_UP` (everything
+captured so far is resolved, its redo done, and in `ENTITY_RECORD`). Do not use `PENDING_KEYS` for this: it is a snapshot taken every 10
 minutes and can read 0 before anything was captured.
 
 | Check | Expect |
@@ -213,17 +213,10 @@ Postgres needs at least 8 GB: `STANDARD_L` (2 cores, 8 GB, 40,000 IOPS, 0.0712 c
 `SZ_HEALTH` fails `PG_TOO_SMALL` (48 engine sessions ran a `BURST_S` out of memory). For a
 large first load use `STANDARD_XL` or larger, then size it back down.
 
-Postgres storage is billed on what is allocated, not what is used: the infrastructure
-script allocates twice what `SZ_EXPECTED_RECORDS` needs at about 12 KB a record (1,000,000
-records by default: 23 GB; at least 10 GB), or exactly `SZ_PG_STORAGE_GB` when you set it.
-Set `SZ_EXPECTED_RECORDS` before the first run: a larger allocation cannot be undone.
-`SZ_HEALTH` warns `PG_DISK_HIGH` once the database uses 75% of it. Snowflake grows it on its own when the disk
-is nearly full (85% used with less than 50 GB free, or 90% used), by 25% for a 100 GB to
-999 GB disk and 15% above that, and puts the instance in read-only mode while it does.
-It never shrinks it. To grow it at a time you choose instead, watch the disk and resize
-first: `ALTER POSTGRES INSTANCE SZ_PG SET STORAGE_SIZE_GB = <gb>`, then
-`CALL <app>.API.SZ_CONFIGURE({'PG_STORAGE_GB': '<gb>'})` so `PG_DISK_HIGH` uses the new size
-([Snowflake Postgres maintenance](https://docs.snowflake.com/en/user-guide/snowflake-postgres/postgres-maintenance)).
+Postgres storage starts at 50 GB. A first load writes write-ahead log faster than Postgres
+archives it, so the disk holds far more than the data while the load runs: 1,000,000 records
+peaked at 41 GB on disk for 12 GB of data. Snowflake grows the disk on its own when it is
+nearly full, and puts the instance in read-only mode while it does ([Snowflake Postgres maintenance](https://docs.snowflake.com/en/user-guide/snowflake-postgres/postgres-maintenance)).
 
 Resizing and server settings go in separate statements. The instance restarts for a resize;
 the resolvers and the replicator reconnect on their own and resume within about 60 seconds
