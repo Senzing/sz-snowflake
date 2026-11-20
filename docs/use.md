@@ -39,7 +39,7 @@ table re-resolves the record whose id is in that table's record id column. So:
 
 - A table that holds the source's record id (the main table, or a child table with a
   foreign key to it) is listed with that column as its `record_id_column`.
-- A table the view only *looks up* (contacts read their employer's `ACCOUNTS` row, which
+- A table the view only _looks up_ (contacts read their employer's `ACCOUNTS` row, which
   holds no contact id) is listed with a `via`: the column of the changed row, and the
   source table and column that point at it. A change to the looked-up row re-resolves
   every record that points at it, before and after the change:
@@ -174,16 +174,19 @@ Idle, the app runs two of the cheapest nodes (`GEN_ARM_G1_2`, 1 vCPU, 6 GiB; one
 and up to 5 GiB each (the node's memory less what Snowflake keeps for itself).
 Under load the resolver service adds instances, up to `RESOLVER_MAX_INSTANCES`, when the
 average resolver uses more than 40% of its CPU for a minute, and removes one when it uses
-less than 25% for three minutes; the pool adds nodes up to `POOL_MAX_NODES` to fit them.
+less than 3% for three minutes (an idle resolver uses under 1%; one still working through
+redo after a load, 6-13%, keeps its place until redo is done); the pool adds nodes up to
+`POOL_MAX_NODES` to fit them.
 CPU scaling does not hold resolvers back when Postgres is the bottleneck: at 6 threads a
 resolver waiting on the database still uses 0.4-0.55 of its CPU, so the autoscaler keeps
 adding them up to the maximum below. That maximum is what sizes the resolvers to Postgres.
 One resolver CPU resolves roughly 35-40 records a second.
 
-Every engine thread holds a Postgres session, and each service 5 more of its own (measured:
-a 4-thread resolver holds 9 sessions; a 6-thread one 11), so `RESOLVER_MAX_INSTANCES` x (threads + 5) plus the
+Every engine thread holds a Postgres session, and each service 5 more of its own; a resolver
+also fetches redo on one engine thread of its own, so it holds threads + 6 (a 4-thread resolver
+10 sessions, a 6-thread one 12). `RESOLVER_MAX_INSTANCES` x (threads + 6) plus the
 replicator's (threads + 5) and the setup job's 4 must fit Postgres. `STANDARD_L` allows 80:
-4 resolvers x 11 + 11 + 4 = 59 at 6 threads. A resolver's threads mostly wait on Postgres
+4 resolvers x 12 + 11 + 4 = 63 at 6 threads. A resolver's threads mostly wait on Postgres
 (at 4 threads one used about half its CPU and 0.4 GiB), so 6 threads per CPU get more from
 each node.
 
@@ -226,8 +229,8 @@ follow it at once, without a restart (`STANDARD_XL`, 4 cores: 8 resolvers, 10 no
 ```sql
 ALTER POSTGRES INSTANCE SZ_PG SET COMPUTE_FAMILY = 'STANDARD_XL';
 CALL SZ_SNOWFLAKE.API.SZ_CONFIGURE({'PG_COMPUTE_FAMILY': 'STANDARD_XL'});
--- an instance created before the infrastructure script turned JIT off:
-ALTER POSTGRES INSTANCE SZ_PG SET POSTGRES_SETTINGS = '{"postgres:jit": "off"}';
+-- an instance created before the infrastructure script set these:
+ALTER POSTGRES INSTANCE SZ_PG SET POSTGRES_SETTINGS = '{"postgres:jit": "off", "postgres:max_wal_size": "4096"}';
 ```
 
 An upgrade keeps every setting you already have, including an earlier release's defaults;
@@ -260,8 +263,9 @@ waited `CLAIM_MAX_WAIT_SECS`, whichever comes first. Each apply scans the replic
 fewer, larger claims are cheaper per id. A trickle of changes therefore reaches the replica
 at most `CLAIM_MAX_WAIT_SECS` after it is resolved. Shorten it (`SZ_SET_CONFIG(
 'CLAIM_MAX_WAIT_SECS', '20')`) for an interactive demo. For a large load, raise it (at most
-900) when `SZ_APPLY` is the bottleneck: `SELECT INSTANCE, APPLY_SECS, ENTITIES_LIVE FROM
-SZ_SNOWFLAKE.SZ.SZ_APPLY_LOG ORDER BY APPLIED_AT DESC LIMIT 20` showing many applies of a
+900) when `SZ_APPLY` is the bottleneck:
+`SELECT INSTANCE, APPLY_SECS, ENTITIES_LIVE FROM SZ_SNOWFLAKE.SZ.SZ_APPLY_LOG ORDER BY APPLIED_AT DESC LIMIT 20`
+showing many applies of a
 few hundred entities that each take tens of seconds means the claims are too small.
 
 ### Pause to save money
@@ -302,7 +306,8 @@ capture and this check run. It never
 re-pauses within the idle window after an unpause, never pauses while setup runs or before
 the services are `READY`, counts the idle time from the latest capture, apply, setup run,
 `SZ_START`/`SZ_RESUME` or source registration (`SZ_HEALTH.LAST_ACTIVITY_AT`) and leaves alone an app you stopped or
-suspended by hand. To turn it off, or change the minutes, set the variables at the top of
+suspended by hand. A task you suspended by hand stays suspended, also through `SZ_PAUSE` and
+`SZ_UNPAUSE`. To turn it off, or change the minutes, set the variables at the top of
 the infrastructure script and run its `INSTALL` section again:
 
 ```sql

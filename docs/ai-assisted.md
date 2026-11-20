@@ -112,9 +112,10 @@ values to the assistant:
 
 > I have no data of my own; use the CORD data. Download `sz-snowflake-cord-data.tar.gz` from
 > the same release and verify it exactly like the other release files (`SHA256SUMS` and
-> its cosign bundle, the README's "Verify" section). Stop if a check fails. Extract it (`tar -xzf`), show
-> me its `README.md` and `load.sql` and run `load.sql` from the extracted directory with
-> my connection after I confirm. Then map each source system in it with the Senzing MCP
+> its signature `SHA256SUMS.sigstore.json`, the README's "Verify" section). Stop if a
+> check fails. Extract it (`tar -xzf`), show me its `README.md` and `load.sql` and run
+> `load.sql` from the extracted directory with my connection after I confirm. Then map
+> each source system in it with the Senzing MCP
 > mapping tools (`mapping_workflow`; never hand-write the mapping): create one mapping
 > view per source in its schema, show me each view and pass one `--source` per source
 > system to the install script, listing every table the view reads: those holding the
