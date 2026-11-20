@@ -8,6 +8,49 @@ Versions here are the releases of sz-snowflake, `<senzing_version>-<build>`
 (for example `4.4.3-1`): the SENZING® SDK version the release carries and a build counter
 that restarts at 1 for each Senzing SDK version.
 
+## [4.4.3-11] - 2026-11-20
+
+### Changed
+
+- Resolvers stay until redo is done. After a load the engine still works through redo, which
+  uses a resolver's CPU lightly (6-13%), and autoscaling removed resolvers below 25%: a
+  1,000,000-record load drained its redo on one resolver for 75 minutes. A resolver is now
+  removed below 3% (an idle one uses under 1%).
+- The infrastructure script creates Postgres with `max_wal_size` 4 GB (Postgres defaults to
+  1 GB). A 1,000,000-record load wrote half the WAL per record, so the archiver has less
+  to ship. An instance created earlier: see [Sizing](docs/use.md#sizing).
+- `SZ_HEALTH.REDO_PENDING` (and `redo_pending` in `SZ_FLUSH`'s answer) is now true or false:
+  true while the resolver's last request for a redo record got one. It was a count of the
+  redo queue, which made the resolver scan the whole queue every minute.
+- Each resolver holds one more Postgres session: its redo fetch runs on an engine thread of
+  its own. The connection budget (`-20024`, [Sizing](docs/use.md#sizing)) counts it.
+
+### Fixed
+
+- Redo drains much faster. The resolver fetched each redo record through the engine threads
+  that were busy processing redo, wrote it to Postgres alone, and waited a second whenever
+  the queue was full. It now fetches on a thread of its own, writes what it fetched in one
+  statement, and fetches more as soon as a worker takes one: on the same 2,676-record redo
+  backlog, one 4-thread resolver drained about 49 records a second before and about 1,650
+  after.
+- The resolver no longer tries to claim a batch after each finished redo record (one claim
+  for every 2 redo records, each holding the resolver's repository session while it asked
+  Snowflake). It claims at a wake, at the idle poll, when a batch finishes and right after a
+  claim that got a batch.
+- `SZ_HEALTH.QUEUE_DEPTH_EST` reads 0 once the replicator has applied everything, and the
+  resolver rewrites its status row within about 10 seconds of that. It stayed above 0 for up
+  to an hour after the queue drained.
+- `SZ_PAUSE` and `SZ_UNPAUSE` no longer resume an auto-pause task you suspended by hand.
+- The install script accepts binary-mode names (`<hash> *<name>`) in `SHA256SUMS`.
+
+### Documentation
+
+- README prerequisites: Google Cloud works with a PostgreSQL 17 or later you operate (`SZ_PG_MODE` `EXTERNAL`); only Snowflake Postgres, the default, is not offered there. Not yet tested on Google Cloud.
+- README sizing: the resolver maximum is 2 resolver CPUs per Postgres core by default (4 on `STANDARD_L`), not 7.
+- Run the install script with `bash` (a downloaded file is not executable). The README
+  says why the `sha256sum` check, not the script itself, proves the install script.
+- Troubleshooting: the one `insufficient memory` event at a pool resume is expected.
+
 ## [4.4.3-10] - 2026-11-13
 
 ### Changed
@@ -31,8 +74,8 @@ that restarts at 1 for each Senzing SDK version.
   With several resolvers, the newest drain any of them noted counts.
 - The install script no longer refuses an edited infrastructure script. Its verify step
   (P1) checked that script's SHA-256 too, and the AI-assisted guide has the assistant edit it
-  in the download directory, so the install stopped with `sz-snowflake-infra-<release>.sql:
-  FAILED`. It still checks the bundles and itself; the infrastructure script is verified when
+  in the download directory, so the install stopped with
+  `sz-snowflake-infra-<release>.sql: FAILED`. It still checks the bundles and itself; the infrastructure script is verified when
   you download it (README "Verify").
 - The infrastructure script checks its role first (I0, `-20925`). It stops before creating
   anything when the primary role and the roles it inherits lack `CREATE DATABASE`,

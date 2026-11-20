@@ -131,7 +131,7 @@ A missing or stale ingress rule shows up as a 10 s connect timeout, not a refusa
 
 | Need | Note |
 |---|---|
-| A Snowflake account on AWS or Azure | Snowflake Postgres is not available on Google Cloud |
+| A Snowflake account on AWS or Azure; on Google Cloud, a PostgreSQL 17 or later you operate | Snowflake Postgres, the default database, is not offered on Google Cloud. There, set the infrastructure script's `SZ_PG_MODE` to `EXTERNAL` for your own PostgreSQL (not yet tested on Google Cloud) |
 | A role that can create an application package and application, a Postgres instance, a network policy and an external access integration | `ACCOUNTADMIN` works; a delegated role is possible |
 | The Snowflake CLI (`snow`) and Docker (or `skopeo` or `crane`) | Docker loads the bundle's images and pushes them to your image repository. Pin `snowflake-connector-python<5`: 5.x breaks the image-registry login (or log in to the registry yourself with a programmatic access token (PAT)) |
 | `cosign`, `sha256sum` | to verify the release files |
@@ -151,7 +151,7 @@ changes arrive, within the check interval plus 3-5 minutes. With a Postgres inst
 workloads share, set `SZ_PG_SHARED = 'YES'`: pausing then stops only the pool (about 2.7
 credits a day saved) and never Postgres
 ([Pause to save money](docs/use.md#pause-to-save-money)).
-Under load the resolvers autoscale on CPU, up to `RESOLVER_MAX_INSTANCES` (7, a cost cap that fits `STANDARD_L`'s connection budget), with the
+Under load the resolvers autoscale on CPU, up to `RESOLVER_MAX_INSTANCES` (by default 2 resolver CPUs per Postgres core: 4 on `STANDARD_L`), with the
 pool adding nodes; one resolver CPU resolves roughly 35-40 records a second. Size Postgres
 for a large first load (`STANDARD_XL` or larger) and back down after it. The app
 checks every configuration against the pool's nodes and the Postgres connection budget.
@@ -210,8 +210,9 @@ The bundle contains the images, so verifying it verifies them. The install scrip
 these checks (the signature against the exact identity, then the SHA-256 of each file it
 uses, which must be listed) before it unpacks the bundle, and stops when one fails. It
 does not re-check the infrastructure script: you verified it here and may edit it before
-you run it.
-`./sz-snowflake-install-<release>.sh <release> --check-only` runs those checks and unpacks the
+you run it. Nor can it vouch for itself (a changed script could skip its own checks): the
+`sha256sum` line above is what proves the install script.
+`bash sz-snowflake-install-<release>.sh <release> --check-only` runs those checks and unpacks the
 bundle for real, then stops: no Snowflake connection, nothing installed.
 
 ## Versions
